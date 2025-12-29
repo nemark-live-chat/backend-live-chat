@@ -1,0 +1,55 @@
+name: Deploy Backend (Windows VPS)
+
+on:
+  push:
+    branches: [develop, main]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    env:
+      PM2_HOME: C:\pm2
+
+    steps:
+      - name: Deploy (pull + install + apply pm2 ecosystem)
+        shell: powershell
+        run: |
+          $pm2 = "C:\Users\Administrator\AppData\Roaming\npm\pm2.cmd"
+
+          if ("${{ github.ref_name }}" -eq "develop") {
+            $APP_DIR  = "C:\apps\backend-dev"
+            $BRANCH   = "develop"
+            $PM2_ONLY = "backend-dev"
+          } else {
+            $APP_DIR  = "C:\apps\backend-prod"
+            $BRANCH   = "main"
+            $PM2_ONLY = "backend-prod"
+          }
+
+          if (!(Test-Path "$APP_DIR\.git")) {
+            throw "Folder $APP_DIR chưa có git repo (.git). Hãy clone repo vào đúng thư mục này trước."
+          }
+
+          Write-Host "Deploying $BRANCH -> $APP_DIR (pm2 only: $PM2_ONLY)"
+
+          git -C $APP_DIR fetch origin $BRANCH
+          git -C $APP_DIR reset --hard "origin/$BRANCH"
+          git -C $APP_DIR clean -fd
+
+          Set-Location $APP_DIR
+
+          npm install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Nếu backend có build (Nest/TS) thì bật dòng này
+          if (Test-Path ".\tsconfig.json") {
+            npm run build
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+          & $pm2 start C:\apps\ecosystem.config.js --only $PM2_ONLY --update-env
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          & $pm2 save
+
+          Write-Host "Deployed commit:" (git -C $APP_DIR rev-parse --short HEAD)
