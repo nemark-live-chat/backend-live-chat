@@ -1,4 +1,4 @@
-name: Deploy Backend (SSH)
+name: Deploy Backend (Windows VPS)
 
 on:
   push:
@@ -6,18 +6,34 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    env:
+      PM2_HOME: C:\pm2
+
     steps:
-      - name: Deploy backend to VPS
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          password: ${{ secrets.VPS_PASSWORD }}
-          port: 22
-          script: |
-            cd C:\apps\backend-live-chat
-            git pull origin main
-            npm install
-            pm2 restart backend-live-chat || pm2 start index.js --name backend-live-chat
-            pm2 save
+      - name: Deploy Backend (main)
+        shell: powershell
+        run: |
+          $pm2 = "C:\Users\Administrator\AppData\Roaming\npm\pm2.cmd"
+          $APP_DIR = "C:\apps\backend-prod"
+          $BRANCH  = "main"
+          $PM2_APP = "backend-prod"
+
+          if (!(Test-Path "$APP_DIR\.git")) {
+            throw "❌ $APP_DIR chưa có git repo"
+          }
+
+          Write-Host "🚀 Deploy backend main → $APP_DIR"
+
+          git -C $APP_DIR fetch origin $BRANCH
+          git -C $APP_DIR reset --hard "origin/$BRANCH"
+          git -C $APP_DIR clean -fd
+
+          cd $APP_DIR
+          npm install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          & $pm2 start C:\apps\ecosystem.config.js --only $PM2_APP --update-env
+          & $pm2 save
+
+          Write-Host "✅ Backend deployed:" (git -C $APP_DIR rev-parse --short HEAD)
