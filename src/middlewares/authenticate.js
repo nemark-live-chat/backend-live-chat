@@ -13,24 +13,23 @@ const authenticate = asyncHandler(async (req, res, next) => {
   const token = authHeader.split(' ')[1];
   
   try {
+const userRepo = require('../modules/auth/repos/user.repo');
+
+// ...
+
     const decoded = tokenUtils.verifyAccessToken(token);
     
-    // Optional: Check if user exists and is active (Standard Enterprise Check)
-    // This adds a DB call per request. For high perf, maybe cache or skip.
-    // Given the requirements "Verify access token + lấy identity", we should probably fetch basic info.
+    // Fetch full user identity to ensure they exist and get latest roles/status
+    const user = await userRepo.findById(decoded.sub);
     
-    // Mock user for now or fetch from DB?
-    // Let's do a lightweight DB check if strictly required, or trust the token if short-lived (15m).
-    // Trusting token is O(0). 
-    // IF we need to enforce "Logout All" instantly, we might need to check a "TokenVersion" or "LastLogoutAt" in DB.
-    // The requirement says "Logout All" -> Revoke all sessions. Access tokens are short lived (15m).
-    // So we can wait 15m for access token to die, or check DB. 
-    // "GET /auth/me -> Verify access token + lấy identity" implies we might fetch.
-    
-    req.user = { 
-      key: decoded.sub, 
-      userId: decoded.sub // Map sub to key
-    };
+    if (!user) {
+       return next(new AppError('Unauthorized: User not found', 401));
+    }
+
+    // Optional: Check if user is active/banned if 'Status' column exists and is used
+    // if (user.Status !== 'Active') ...
+
+    req.user = user;
     
     // Check if Status is Active?
     // We can do this in the Repo layer or here.

@@ -23,10 +23,11 @@ const createUser = async (userData, txn) => {
     .input('email', sql.NVarChar, userData.email)
     .input('emailNorm', sql.NVarChar, userData.email.toLowerCase()) // TODO: Better helper
     .input('displayName', sql.NVarChar, userData.displayName || null)
+    .input('isSystemAdmin', sql.Bit, 0) // Default to 0 (false)
     .query(`
-      INSERT INTO iam.Users (Email, EmailNormalized, DisplayName)
+      INSERT INTO iam.Users (Email, EmailNormalized, DisplayName, IsSystemAdmin)
       OUTPUT inserted.*
-      VALUES (@email, @emailNorm, @displayName)
+      VALUES (@email, @emailNorm, @displayName, @isSystemAdmin)
     `);
     
   return result.recordset[0];
