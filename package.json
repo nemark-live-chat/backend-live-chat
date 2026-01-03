@@ -6,8 +6,10 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js",
+    "prestart": "echo \"Skipping automatic swagger generation\"",
     "start:dev": "node index.js",
     "dev": "nodemon index.js",
+    "swagger-gen": "node src/bootstrap/swagger_gen.js",
     "lint": "echo \"No linter configured. Install ESLint if needed.\" && exit 0"
   },
   "repository": {
@@ -22,10 +24,18 @@
   },
   "homepage": "https://github.com/nemark-live-chat/backend-live-chat#readme",
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "express": "^5.2.1",
-    "socket.io": "^4.8.3"
+    "express": "^4.21.1",
+    "express-rate-limit": "^8.2.1",
+    "helmet": "^8.1.0",
+    "joi": "^18.0.2",
+    "mongoose": "^8.0.0",
+    "mssql": "^11.0.1",
+    "socket.io": "^4.8.3",
+    "swagger-autogen": "^2.23.7",
+    "swagger-ui-express": "^5.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"
