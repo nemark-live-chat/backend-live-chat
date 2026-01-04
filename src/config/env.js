@@ -5,7 +5,7 @@ const env = {
     port: process.env.PORT || 3000,
     env: process.env.NODE_ENV || 'development',
     jwtSecret: process.env.JWT_SECRET || 'default_secret_please_change_in_prod',
-    jwtExpiresIn: process.env.JWT_EXPIRES_IN || '15m', // Short-lived access
+    jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d', // Long-lived access per request
     jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d', // Rotation
   },
   sql: {

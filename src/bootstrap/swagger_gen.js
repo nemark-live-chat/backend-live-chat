@@ -16,7 +16,7 @@ const doc = {
       type: 'apiKey',
       in: 'header',
       name: 'Authorization',
-      description: 'Bearer <token>'
+      description: 'Enter: Bearer <token> (Example: Bearer eyJ...)'
     }
   },
   security: [
