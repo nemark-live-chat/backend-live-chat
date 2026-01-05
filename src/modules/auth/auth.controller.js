@@ -28,13 +28,13 @@ const logoutAll = asyncHandler(async (req, res) => {
 });
 
 const me = asyncHandler(async (req, res) => {
-  // Identify already done by authenticate middleware
-  // We can return user info
+  const context = await authService.getMeWithContext(req.user.key);
+  
   res.status(200).json({ 
     status: 'success', 
     data: { 
-      user: req.user, 
-      // Add more details if fetched from DB
+      user: req.user,
+      workspaces: context
     } 
   });
 });

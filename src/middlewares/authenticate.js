@@ -6,11 +6,18 @@ const constants = require('../config/constants');
 
 const authenticate = asyncHandler(async (req, res, next) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return next(new AppError('Unauthorized: No token provided', 401));
+  let token;
+  
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  } else {
+    // Fallback: Try to use the header value directly as the token
+    token = authHeader;
   }
 
-  const token = authHeader.split(' ')[1];
+  if (!token) {
+    return next(new AppError('Unauthorized: No token provided', 401));
+  }
   
   try {
 const userRepo = require('../modules/auth/repos/user.repo');

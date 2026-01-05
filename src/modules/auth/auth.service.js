@@ -32,6 +32,10 @@ const register = async ({ email, password, firstName, lastName, displayName }) =
   try {
     await txn.begin();
 
+const iamRepo = require('./repos/iam.repo');
+
+// ...
+
     // Create User
     const user = await userRepo.createUser({ email, displayName }, txn);
     
@@ -39,8 +43,33 @@ const register = async ({ email, password, firstName, lastName, displayName }) =
     const hash = await passwordUtils.hashPassword(password);
     await credentialRepo.createCredential(user.UserKey, hash, txn);
 
+    // 4. SaaS Setup (Case A: Auto-create Workspace)
+    // Only if NOT System Admin (System Admin bypasses IAM usually, or depends on requirements. 
+    // User said: "If user is SystemAdmin = 1 -> NO workspace/membership needed".)
+    // But createUser defaults IsSystemAdmin to 0. Unless we allow setting it?
+    // Current register input doesn't accept IsSystemAdmin (security).
+    // So normal users always get a workspace.
+
+    const workspaceName = `Workspace của ${displayName || email}`;
+    const workspace = await iamRepo.createWorkspace(workspaceName, txn);
+    
+    // Create Owner Role
+    const ownerRole = await iamRepo.createRole(workspace.WorkspaceKey, 'Owner', txn);
+    
+    // Create Membership
+    const membership = await iamRepo.createMembership(workspace.WorkspaceKey, user.UserKey, txn);
+    
+    // Assign Owner Role
+    await iamRepo.addRoleToMembership(membership.MembershipKey, ownerRole.RoleKey, txn);
+    
+    // Grant Permissions
+    await iamRepo.grantAllPermissionsToRole(workspace.WorkspaceKey, ownerRole.RoleKey, txn);
+    
+    // Rebuild Effective Permissions
+    await iamRepo.rebuildMembershipEffectivePermissions(membership.MembershipKey, txn);
+
     await txn.commit();
-    return { userKey: user.UserKey, email: user.Email };
+    return { userKey: user.UserKey, email: user.Email, workspaceKey: workspace.WorkspaceKey };
   } catch (err) {
     await txn.rollback();
     throw err;
@@ -266,6 +295,10 @@ const revokeSession = async (userKey, sessionId) => {
   await tokenRepo.revokeByKey(sessionId); // TODO: Add ownership check in Repo
 };
 
+const getMeWithContext = async (userKey) => {
+  return await userRepo.getUserContext(userKey);
+};
+
 module.exports = {
   register,
   login,
@@ -276,5 +309,6 @@ module.exports = {
   forgotPassword,
   resetPassword,
   listSessions,
-  revokeSession
+  revokeSession,
+  getMeWithContext
 };

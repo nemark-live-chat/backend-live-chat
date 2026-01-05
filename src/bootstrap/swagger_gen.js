@@ -16,7 +16,7 @@ const doc = {
       type: 'apiKey',
       in: 'header',
       name: 'Authorization',
-      description: 'Bearer <token>'
+      description: 'Enter: Bearer <token> (Example: Bearer eyJ...)'
     }
   },
   security: [
@@ -235,6 +235,134 @@ const doc = {
           "responses": {
             "200": { "description": "OK" }
           }
+        }
+      },
+      "/widget.js": {
+        "get": {
+          "tags": ["Public Widget"],
+          "summary": "Get Widget Script",
+          "description": "Returns the vanilla JS chat widget script.",
+          "produces": ["application/javascript"],
+          "responses": {
+            "200": { "description": "JavaScript Code" }
+          }
+        }
+      },
+      "/api/widgets": {
+        "post": {
+          "tags": ["Widgets"],
+          "summary": "Create Widget",
+          "security": [{ "bearerAuth": [] }],
+          "parameters": [
+            {
+              "name": "x-workspace-id",
+              "in": "header",
+              "required": true,
+              "type": "string"
+            },
+            {
+              "name": "body",
+              "in": "body",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "allowedDomains": { "type": "array", "items": { "type": "string" } },
+                  "theme": { 
+                    "type": "object",
+                    "properties": {
+                      "title": { "type": "string" },
+                      "subtitle": { "type": "string" },
+                      "color": { "type": "string" },
+                      "position": { "type": "string", "enum": ["br", "bl"] },
+                      "autoOpen": { "type": "boolean" }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "responses": { "201": { "description": "Created" } }
+        }
+      },
+      "/api/widgets/{widgetId}": {
+        "get": {
+          "tags": ["Widgets"],
+          "summary": "Get Widget",
+          "security": [{ "bearerAuth": [] }],
+          "parameters": [
+            { "name": "x-workspace-id", "in": "header", "required": true, "type": "string" },
+            { "name": "widgetId", "in": "path", "required": true, "type": "string" }
+          ],
+          "responses": { "200": { "description": "OK" } }
+        },
+        "patch": {
+          "tags": ["Widgets"],
+          "summary": "Update Widget",
+          "security": [{ "bearerAuth": [] }],
+          "parameters": [
+            { "name": "x-workspace-id", "in": "header", "required": true, "type": "string" },
+            { "name": "widgetId", "in": "path", "required": true, "type": "string" },
+            {
+              "name": "body",
+              "in": "body",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "status": { "type": "integer" },
+                  "allowedDomains": { "type": "array", "items": { "type": "string" } },
+                  "theme": { "type": "object" }
+                }
+              }
+            }
+          ],
+          "responses": { "200": { "description": "OK" } }
+        }
+      },
+      "/api/widgets/{widgetId}/embed": {
+        "get": {
+          "tags": ["Widgets"],
+          "summary": "Get Embed Code",
+          "security": [{ "bearerAuth": [] }],
+          "parameters": [
+            { "name": "x-workspace-id", "in": "header", "required": true, "type": "string" },
+            { "name": "widgetId", "in": "path", "required": true, "type": "string" }
+          ],
+          "responses": { "200": { "description": "OK" } }
+        }
+      },
+      "/public/widgets/{widgetId}/config": {
+        "get": {
+          "tags": ["Public Widget"],
+          "summary": "Get Config",
+          "parameters": [
+            { "name": "widgetId", "in": "path", "required": true, "type": "string" },
+            { "name": "host", "in": "query", "type": "string" }
+          ],
+          "responses": { "200": { "description": "OK" } }
+        }
+      },
+      "/public/widgets/{widgetId}/messages": {
+        "post": {
+          "tags": ["Public Widget"],
+          "summary": "Post Message",
+          "parameters": [
+            { "name": "widgetId", "in": "path", "required": true, "type": "string" },
+            {
+              "name": "body",
+              "in": "body",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "visitorId": { "type": "string" },
+                  "content": { "type": "string" },
+                  "url": { "type": "string" }
+                }
+              }
+            }
+          ],
+          "responses": { "201": { "description": "Created" } }
         }
       }
   },
