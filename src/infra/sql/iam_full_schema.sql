@@ -7,7 +7,7 @@
    - Fast authorization (O(1))
 
    DATABASE: SQL Server
-   AUTHOR: Final validated version (with Lockout extensions)
+   AUTHOR: Final validated version
 ========================================================= */
 
 SET NOCOUNT ON;
@@ -27,7 +27,6 @@ GO
 ------------------------------------------------------------
 -- 1) USERS (global identity)
 ------------------------------------------------------------
-IF OBJECT_ID('iam.Users', 'U') IS NULL
 CREATE TABLE iam.Users (
     UserKey BIGINT IDENTITY(1,1) NOT NULL,
     UserId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
@@ -52,16 +51,11 @@ GO
 ------------------------------------------------------------
 -- 2) USER CREDENTIALS
 ------------------------------------------------------------
-IF OBJECT_ID('iam.UserCredentials', 'U') IS NULL
 CREATE TABLE iam.UserCredentials (
     UserKey BIGINT NOT NULL,
     PasswordHash NVARCHAR(MAX) NOT NULL,
     PasswordAlgo NVARCHAR(30) NOT NULL,
     MustChangePassword BIT NOT NULL DEFAULT 0,
-
-    -- Added for Security Rules (Account Lockout)
-    FailedLoginAttempts TINYINT NOT NULL DEFAULT 0,
-    LockUntil DATETIME2(3) NULL,
 
     CreatedAt DATETIME2(3) NOT NULL DEFAULT SYSUTCDATETIME(),
 
@@ -72,32 +66,8 @@ CREATE TABLE iam.UserCredentials (
 GO
 
 ------------------------------------------------------------
--- 2b) REFRESH TOKENS (Start of Session Management)
-------------------------------------------------------------
-IF OBJECT_ID('iam.RefreshTokens', 'U') IS NULL
-CREATE TABLE iam.RefreshTokens (
-    RefreshTokenKey BIGINT IDENTITY(1,1) NOT NULL,
-    UserKey BIGINT NOT NULL,
-    TokenHash NVARCHAR(MAX) NOT NULL, -- Store hash, not raw token
-    
-    ExpiresAt DATETIME2(3) NOT NULL,
-    RevokedAt DATETIME2(3) NULL,
-    FamilyId UNIQUEIDENTIFIER NULL, -- For rotation families
-    
-    CreatedAt DATETIME2(3) NOT NULL DEFAULT SYSUTCDATETIME(),
-    CreatedByIp NVARCHAR(50) NULL,
-    UserAgent NVARCHAR(500) NULL,
-
-    CONSTRAINT PK_RefreshTokens PRIMARY KEY (RefreshTokenKey),
-    CONSTRAINT FK_RefreshTokens_User
-        FOREIGN KEY (UserKey) REFERENCES iam.Users(UserKey) ON DELETE CASCADE
-);
-GO
-
-------------------------------------------------------------
 -- 3) WORKSPACES (tenant)
 ------------------------------------------------------------
-IF OBJECT_ID('iam.Workspaces', 'U') IS NULL
 CREATE TABLE iam.Workspaces (
     WorkspaceKey BIGINT IDENTITY(1,1) NOT NULL,
     WorkspaceId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
@@ -116,7 +86,6 @@ GO
 ------------------------------------------------------------
 -- 4) MEMBERSHIPS (user in workspace)
 ------------------------------------------------------------
-IF OBJECT_ID('iam.Memberships', 'U') IS NULL
 CREATE TABLE iam.Memberships (
     MembershipKey BIGINT IDENTITY(1,1) NOT NULL,
     MembershipId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
@@ -141,7 +110,6 @@ GO
 ------------------------------------------------------------
 -- 5) ROLES (per workspace)
 ------------------------------------------------------------
-IF OBJECT_ID('iam.Roles', 'U') IS NULL
 CREATE TABLE iam.Roles (
     RoleKey BIGINT IDENTITY(1,1) NOT NULL,
     RoleId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
@@ -161,7 +129,6 @@ GO
 ------------------------------------------------------------
 -- 6) MEMBERSHIP ROLES (N-N)
 ------------------------------------------------------------
-IF OBJECT_ID('iam.MembershipRoles', 'U') IS NULL
 CREATE TABLE iam.MembershipRoles (
     MembershipKey BIGINT NOT NULL,
     RoleKey BIGINT NOT NULL,
@@ -177,7 +144,6 @@ GO
 ------------------------------------------------------------
 -- 7) PERMISSIONS (global catalog)
 ------------------------------------------------------------
-IF OBJECT_ID('iam.Permissions', 'U') IS NULL
 CREATE TABLE iam.Permissions (
     PermissionKey INT IDENTITY(1,1) NOT NULL,
     Code NVARCHAR(150) NOT NULL, -- conversation.reply
@@ -192,7 +158,6 @@ GO
 ------------------------------------------------------------
 -- 8) ROLE PERMISSION GRANTS
 ------------------------------------------------------------
-IF OBJECT_ID('iam.RolePermissionGrants', 'U') IS NULL
 CREATE TABLE iam.RolePermissionGrants (
     GrantKey BIGINT IDENTITY(1,1) NOT NULL,
     RoleKey BIGINT NOT NULL,
@@ -213,7 +178,6 @@ GO
 ------------------------------------------------------------
 -- 9) RESOURCE TYPES
 ------------------------------------------------------------
-IF OBJECT_ID('iam.ResourceTypes', 'U') IS NULL
 CREATE TABLE iam.ResourceTypes (
     ResourceTypeKey SMALLINT IDENTITY(1,1) NOT NULL,
     Code NVARCHAR(50) NOT NULL, -- inbox, department, tag
@@ -226,7 +190,6 @@ GO
 ------------------------------------------------------------
 -- 10) RESOURCES (scope registry)
 ------------------------------------------------------------
-IF OBJECT_ID('iam.Resources', 'U') IS NULL
 CREATE TABLE iam.Resources (
     ResourceKey BIGINT IDENTITY(1,1) NOT NULL,
     WorkspaceKey BIGINT NOT NULL,
@@ -246,41 +209,42 @@ GO
 ------------------------------------------------------------
 -- 11) GRANT SCOPES
 ------------------------------------------------------------
-IF OBJECT_ID('iam.GrantScopes', 'U') IS NULL
-BEGIN
-    CREATE TABLE iam.GrantScopes (
-        GrantKey BIGINT NOT NULL,
-        ResourceKey BIGINT NULL, -- NULL = workspace-wide
+------------------------------------------------------------
+-- 11) GRANT SCOPES (FIX PK nullable - SQL Server safe)
+------------------------------------------------------------
+CREATE TABLE iam.GrantScopes (
+    GrantKey BIGINT NOT NULL,
+    ResourceKey BIGINT NULL, -- NULL = workspace-wide
 
-        -- Non-null surrogate for PK
-        ResourceKeyNN AS (ISNULL(ResourceKey, 0)) PERSISTED,
+    -- Non-null surrogate for PK
+    ResourceKeyNN AS (ISNULL(ResourceKey, 0)) PERSISTED,
 
-        CONSTRAINT PK_GrantScopes
-            PRIMARY KEY (GrantKey, ResourceKeyNN),
+    CONSTRAINT PK_GrantScopes
+        PRIMARY KEY (GrantKey, ResourceKeyNN),
 
-        CONSTRAINT FK_GrantScopes_Grant
-            FOREIGN KEY (GrantKey)
-            REFERENCES iam.RolePermissionGrants(GrantKey) ON DELETE CASCADE,
+    CONSTRAINT FK_GrantScopes_Grant
+        FOREIGN KEY (GrantKey)
+        REFERENCES iam.RolePermissionGrants(GrantKey) ON DELETE CASCADE,
 
-        CONSTRAINT FK_GrantScopes_Resource
-            FOREIGN KEY (ResourceKey)
-            REFERENCES iam.Resources(ResourceKey)
-    );
+    CONSTRAINT FK_GrantScopes_Resource
+        FOREIGN KEY (ResourceKey)
+        REFERENCES iam.Resources(ResourceKey)
+);
+GO
 
-    CREATE INDEX IX_GrantScopes_Grant
-    ON iam.GrantScopes (GrantKey, ResourceKeyNN);
+CREATE INDEX IX_GrantScopes_Grant
+ON iam.GrantScopes (GrantKey, ResourceKeyNN);
+GO
 
-    CREATE INDEX IX_GrantScopes_Resource
-    ON iam.GrantScopes (ResourceKey)
-    INCLUDE (GrantKey);
-END
+CREATE INDEX IX_GrantScopes_Resource
+ON iam.GrantScopes (ResourceKey)
+INCLUDE (GrantKey);
 GO
 
 
 ------------------------------------------------------------
 -- 12) MEMBERSHIP PERMISSION OVERRIDES
 ------------------------------------------------------------
-IF OBJECT_ID('iam.MembershipPermissionOverrides', 'U') IS NULL
 CREATE TABLE iam.MembershipPermissionOverrides (
     OverrideKey BIGINT IDENTITY(1,1) NOT NULL,
     MembershipKey BIGINT NOT NULL,
@@ -305,33 +269,31 @@ GO
 ------------------------------------------------------------
 -- 13) EFFECTIVE PERMISSIONS (FAST AUTHORIZATION)
 ------------------------------------------------------------
-IF OBJECT_ID('iam.MembershipEffectivePermissions', 'U') IS NULL
-BEGIN
-    CREATE TABLE iam.MembershipEffectivePermissions (
-        MembershipKey BIGINT NOT NULL,
-        PermissionKey INT NOT NULL,
-        ResourceKey BIGINT NULL,
+CREATE TABLE iam.MembershipEffectivePermissions (
+    MembershipKey BIGINT NOT NULL,
+    PermissionKey INT NOT NULL,
+    ResourceKey BIGINT NULL,
 
-        -- PK-safe column (NULL => 0 = workspace-wide)
-        ResourceKeyNN AS (ISNULL(ResourceKey, 0)) PERSISTED,
+    -- PK-safe column (NULL => 0 = workspace-wide)
+    ResourceKeyNN AS (ISNULL(ResourceKey, 0)) PERSISTED,
 
-        Effect TINYINT NOT NULL,      -- 1=Allow,2=Deny
-        SourceType TINYINT NOT NULL,  -- 1=Role,2=Override
+    Effect TINYINT NOT NULL,      -- 1=Allow,2=Deny
+    SourceType TINYINT NOT NULL,  -- 1=Role,2=Override
 
-        CONSTRAINT PK_MembershipEffectivePermissions
-            PRIMARY KEY (MembershipKey, PermissionKey, ResourceKeyNN, Effect, SourceType),
+    CONSTRAINT PK_MembershipEffectivePermissions
+        PRIMARY KEY (MembershipKey, PermissionKey, ResourceKeyNN, Effect, SourceType),
 
-        CONSTRAINT FK_MEP_Membership
-            FOREIGN KEY (MembershipKey) REFERENCES iam.Memberships(MembershipKey) ON DELETE CASCADE,
-        CONSTRAINT FK_MEP_Permission
-            FOREIGN KEY (PermissionKey) REFERENCES iam.Permissions(PermissionKey),
-        CONSTRAINT FK_MEP_Resource
-            FOREIGN KEY (ResourceKey) REFERENCES iam.Resources(ResourceKey)
-    );
+    CONSTRAINT FK_MEP_Membership
+        FOREIGN KEY (MembershipKey) REFERENCES iam.Memberships(MembershipKey) ON DELETE CASCADE,
+    CONSTRAINT FK_MEP_Permission
+        FOREIGN KEY (PermissionKey) REFERENCES iam.Permissions(PermissionKey),
+    CONSTRAINT FK_MEP_Resource
+        FOREIGN KEY (ResourceKey) REFERENCES iam.Resources(ResourceKey)
+);
+GO
 
-    CREATE INDEX IX_MEP_Authorize
-    ON iam.MembershipEffectivePermissions (MembershipKey, PermissionKey, ResourceKeyNN, Effect);
-END
+CREATE INDEX IX_MEP_Authorize
+ON iam.MembershipEffectivePermissions (MembershipKey, PermissionKey, ResourceKeyNN, Effect);
 GO
 
 ------------------------------------------------------------

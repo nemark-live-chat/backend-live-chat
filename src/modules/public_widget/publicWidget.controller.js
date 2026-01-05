@@ -2,7 +2,7 @@ const service = require('./publicWidget.service');
 const asyncHandler = require('../../utils/asyncHandler');
 const AppError = require('../../utils/AppError');
 
-// Retrieve Widget Script
+// Retrieve Widget Script (Legacy - backwards compatibility)
 const getScript = (req, res) => {
   const jsContent = `
 (function() {
@@ -243,6 +243,66 @@ const getScript = (req, res) => {
   res.send(jsContent);
 };
 
+// ============================================
+// NEW ENDPOINTS FOR IFRAME-BASED WIDGET
+// ============================================
+
+/**
+ * POST /public/widgets/init
+ * Initialize or get existing conversation for visitor
+ */
+const initConversation = asyncHandler(async (req, res) => {
+  const { siteKey, visitorId } = req.body;
+
+  if (!siteKey || !visitorId) {
+    throw new AppError('siteKey and visitorId are required', 400);
+  }
+
+  // Get widget by siteKey
+  const widget = await service.getWidgetBySiteKey(siteKey);
+  if (!widget || widget.Status !== 1) {
+    throw new AppError('Widget not found or disabled', 404);
+  }
+
+  // Get or create conversation
+  const result = await service.getOrCreateConversation(widget.WidgetKey, visitorId);
+
+  res.status(200).json({
+    status: 'success',
+    data: {
+      conversationId: result.conversationId,
+      created: result.created,
+      widgetName: widget.Name
+    }
+  });
+});
+
+/**
+ * GET /public/widgets/messages/:conversationId
+ * Get messages for a conversation
+ */
+const getMessages = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const { after } = req.query; // Optional: get messages after this timestamp
+
+  if (!conversationId) {
+    throw new AppError('conversationId is required', 400);
+  }
+
+  const messages = await service.getMessages(conversationId, after);
+
+  res.status(200).json({
+    status: 'success',
+    data: {
+      items: messages
+    }
+  });
+});
+
+// ============================================
+// LEGACY ENDPOINTS (widgetId based)
+// ============================================
+
 // GET Config
 const getConfig = asyncHandler(async (req, res) => {
   const { widgetId } = req.params;
@@ -274,7 +334,7 @@ const getConfig = asyncHandler(async (req, res) => {
 // POST Message
 const postMessage = asyncHandler(async (req, res) => {
   const { widgetId } = req.params;
-  const { visitorId, content, url } = req.body;
+  const { visitorId, content, url, conversationId } = req.body;
   
   // Basic Origin Check (Duplicate logic, ideally in middleware or service)
   const origin = req.headers.origin || (url ? new URL(url).origin : '');
@@ -288,13 +348,33 @@ const postMessage = asyncHandler(async (req, res) => {
     throw new AppError('Domain not allowed', 403);
   }
 
-  const result = await service.createMessage(widget.WidgetKey, { visitorId, content });
+  const result = await service.createMessage(widget.WidgetKey, { visitorId, content, conversationId });
   
+  res.status(201).json({ status: 'success', data: result });
+});
+
+/**
+ * POST /public/widgets/messages
+ * Send message using conversationId (for iframe widget)
+ */
+const sendMessage = asyncHandler(async (req, res) => {
+  const { conversationId, text, sender } = req.body;
+
+  if (!conversationId || !text) {
+    throw new AppError('conversationId and text are required', 400);
+  }
+
+  const senderType = sender === 'agent' ? 2 : 1; // 1 = visitor, 2 = agent
+  const result = await service.sendMessage(conversationId, text, senderType);
+
   res.status(201).json({ status: 'success', data: result });
 });
 
 module.exports = {
   getScript,
+  initConversation,
+  getMessages,
+  sendMessage,
   getConfig,
   postMessage
 };
