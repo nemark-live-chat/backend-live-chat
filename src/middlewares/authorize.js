@@ -8,7 +8,9 @@ const constants = require('../config/constants');
 const PERMISSION_KEYS = {
   'conversation.reply': 101,
   'conversation.read': 100,
-  // Add more as needed
+  'conversation.reply': 101,
+  'widget.read': 200,   // Ensure this matches DB
+  'widget.manage': 201, // Ensure this matches DB
 };
 
 const authorize = (permissionCode, options = {}) => {
