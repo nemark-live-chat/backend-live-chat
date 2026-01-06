@@ -25,7 +25,18 @@ const env = {
   },
   mongo: {
     uri: process.env.MONGO_URI || 'mongodb://localhost:27017/chat_db',
+  },
+  embed: {
+    jwtSecret: process.env.EMBED_JWT_SECRET || process.env.JWT_SECRET || 'embed_secret_change_in_prod',
+    tokenTTL: parseInt(process.env.EMBED_TOKEN_TTL_SECONDS, 10) || 86400, // 24 hours
+    widgetCacheTTL: parseInt(process.env.EMBED_WIDGET_CACHE_SECONDS, 10) || 3600, // 1 hour
+    devAllowAll: process.env.EMBED_DEV_ALLOW_ALL === 'true',
+  },
+  urls: {
+    backend: process.env.BACKEND_PUBLIC_URL || 'http://localhost:3001',
+    frontend: process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000',
   }
 };
 
 module.exports = env;
+
