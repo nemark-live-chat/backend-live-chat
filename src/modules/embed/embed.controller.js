@@ -254,19 +254,17 @@ const getFrame = (req, res) => {
     const framePath = path.join(__dirname, 'frame.html');
     const html = fs.readFileSync(framePath, 'utf8');
 
-    // Get allowed origins from query or use wildcard for dev
-    const { siteKey } = req.query;
-    let frameAncestors = '*';
-
-    // In production, could restrict frame-ancestors based on widget config
-    // For now, we rely on token validation
-
+    // Allow embedding from any origin
+    // Content-Security-Policy frame-ancestors replaces X-Frame-Options
     res.set({
       'Content-Type': 'text/html; charset=utf-8',
-      'Content-Security-Policy': `frame-ancestors ${frameAncestors}`,
-      'X-Frame-Options': '', // Remove X-Frame-Options to allow embedding
+      'Content-Security-Policy': 'frame-ancestors *',
+      'Access-Control-Allow-Origin': '*',
       'Cache-Control': 'no-cache'
     });
+
+    // Explicitly remove X-Frame-Options if set by helmet
+    res.removeHeader('X-Frame-Options');
 
     res.send(html);
   } catch (err) {
