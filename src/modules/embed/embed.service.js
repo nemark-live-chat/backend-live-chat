@@ -255,6 +255,7 @@ const getMessages = async (conversationId, limit = 30, before = null) => {
 
 /**
  * Update conversation last activity timestamp
+ * LEGACY: Use updateConversationActivityWithSeq for new code
  * @param {number} conversationKey - Conversation key
  */
 const updateConversationActivity = async (conversationKey) => {
@@ -266,6 +267,51 @@ const updateConversationActivity = async (conversationKey) => {
       SET LastMessageAt = SYSUTCDATETIME(), UpdatedAt = SYSUTCDATETIME()
       WHERE ConversationKey = @conversationKey
     `);
+};
+
+/**
+ * Update conversation with latest message metadata
+ * Uses safety condition to prevent LastMessageSeq from going backwards
+ * This is critical for "last message correctness" under concurrent writes
+ * 
+ * @param {number} conversationKey - Conversation key
+ * @param {number} seq - Message sequence number
+ * @param {string} content - Message content (for preview)
+ * @param {string} mongoId - MongoDB message ID (optional)
+ */
+const updateConversationActivityWithSeq = async (conversationKey, seq, content, mongoId = null) => {
+  const pool = getPool();
+  const preview = content ? content.substring(0, 200) : null;
+
+  await pool.request()
+    .input('conversationKey', sql.BigInt, conversationKey)
+    .input('seq', sql.BigInt, seq)
+    .input('preview', sql.NVarChar, preview)
+    .input('mongoId', sql.NVarChar, mongoId)
+    .query(`
+      UPDATE iam.WidgetConversations 
+      SET 
+        LastMessageAt = SYSUTCDATETIME(), 
+        UpdatedAt = SYSUTCDATETIME(),
+        LastMessageSeq = @seq,
+        LastMessagePreview = @preview,
+        LastMessageMongoId = @mongoId
+      WHERE ConversationKey = @conversationKey
+        AND (LastMessageSeq IS NULL OR @seq > LastMessageSeq)
+    `);
+  // Note: condition "@seq > LastMessageSeq" prevents seq from going backwards
+  // when messages arrive out-of-order due to network delays
+};
+
+/**
+ * Get messages with keyset cursor pagination
+ * @param {number} conversationKey - SQL conversation key  
+ * @param {number} limit - Max messages to return
+ * @param {number|null} cursorSeq - Get messages with seq < cursorSeq
+ * @returns {object} { items: Message[], nextCursor: { seq: number } | null }
+ */
+const getMessagesBySeq = async (conversationKey, limit = 30, cursorSeq = null) => {
+  return messageService.getMessagesBySeq(conversationKey, limit, cursorSeq);
 };
 
 /**
@@ -382,7 +428,9 @@ module.exports = {
   getConversationByVisitorAndSiteKey,
   createMessage,
   getMessages,
+  getMessagesBySeq,
   updateConversationActivity,
+  updateConversationActivityWithSeq,
   listConversations,
   listConversationsBySiteKey,
   getConversationById

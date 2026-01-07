@@ -446,7 +446,7 @@ const getConversations = asyncHandler(async (req, res) => {
 
 /**
  * GET /api/embed/messages/:conversationId
- * Get messages for a conversation
+ * Get messages for a conversation (LEGACY - uses timestamp pagination)
  */
 const getMessages = asyncHandler(async (req, res) => {
   const { conversationId } = req.params;
@@ -463,6 +463,44 @@ const getMessages = asyncHandler(async (req, res) => {
     data: {
       messages
     }
+  });
+});
+
+/**
+ * GET /api/embed/conversations/:conversationId/messages
+ * Get messages with keyset cursor pagination (RECOMMENDED)
+ * Uses seq for stable ordering under concurrent writes
+ * 
+ * Query params:
+ * - limit: max messages (default 30, max 100)
+ * - cursorSeq: get messages with seq < cursorSeq (for "load older")
+ */
+const getMessagesBySeq = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const { limit = 30, cursorSeq } = req.query;
+
+  if (!conversationId) {
+    throw new AppError('conversationId is required', 400);
+  }
+
+  // Lookup conversation to get conversationKey
+  const conv = await embedService.getConversationById(conversationId);
+  if (!conv) {
+    throw new AppError('Conversation not found', 404);
+  }
+
+  const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 100);
+  const parsedCursorSeq = cursorSeq ? parseInt(cursorSeq, 10) : null;
+
+  const result = await embedService.getMessagesBySeq(
+    conv.ConversationKey,
+    parsedLimit,
+    parsedCursorSeq
+  );
+
+  res.status(200).json({
+    status: 'success',
+    data: result
   });
 });
 
@@ -497,10 +535,10 @@ const createAgentSession = asyncHandler(async (req, res) => {
 
 /**
  * POST /api/embed/agent-message
- * Send message as agent
+ * Send message as agent with seq ordering
  */
 const sendAgentMessage = asyncHandler(async (req, res) => {
-  const { siteKey, visitorId, conversationId, text } = req.body;
+  const { siteKey, visitorId, conversationId, text, clientMsgId } = req.body;
 
   if (!siteKey || !visitorId || !text) {
     throw new AppError('siteKey, visitorId, and text are required', 400);
@@ -522,25 +560,44 @@ const sendAgentMessage = asyncHandler(async (req, res) => {
     throw new AppError('Conversation not found', 404);
   }
 
-  // Create message
+  // Ensure clientMsgId exists (Agent messages might be manual)
+  // Fixes Unique Compound Index error (conversationKey + clientMsgId=null)
+  const finalClientMsgId = clientMsgId || `agent-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+
+  // Create message with seq allocation and dedup
   const message = await embedService.createMessage(
     conv.ConversationKey,
     text.trim(),
     2, // agent
-    'agent'
+    'agent',
+    conv.ConversationId,
+    finalClientMsgId
   );
 
-  // Update activity
-  await embedService.updateConversationActivity(conv.ConversationKey);
+  // Update activity with seq safety (async, don't block)
+  embedService.updateConversationActivityWithSeq(
+    conv.ConversationKey,
+    message.seq,
+    message.content,
+    message.messageId
+  ).catch(err => console.error('Failed to update conversation activity:', err));
 
+  // CRITICAL: Build response from DB record
   const messageData = {
     id: message.messageId,
-    text: text.trim(),
+    seq: message.seq,
+    conversationId: conv.ConversationId, // Add Context
+    visitorId: visitorId,                // Add Context
+    text: message.content,
     sender: 'agent',
-    createdAt: message.createdAt
+    senderType: message.senderType,
+    senderId: message.senderId,
+    createdAt: message.createdAt,
+    clientMsgId: message.clientMsgId,
+    isDuplicate: message.isDuplicate || false
   };
 
-  // Emit via socket
+  // Emit via socket using DB record
   try {
     const { emitToEmbedRoom } = require('../../bootstrap/socket');
     const roomName = `embed:${siteKey}:${visitorId}`;
@@ -566,6 +623,7 @@ module.exports = {
   getAdmin,
   getConversations,
   getMessages,
+  getMessagesBySeq,
   createAgentSession,
   sendAgentMessage
 };

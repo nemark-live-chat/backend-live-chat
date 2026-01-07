@@ -32,7 +32,10 @@ router.post('/session', strictRateLimiter, controller.createSession);
 // Conversations list (for agents)
 router.get('/conversations', controller.getConversations);
 
-// Messages for a conversation
+// Messages for a conversation with keyset cursor pagination (RECOMMENDED)
+router.get('/conversations/:conversationId/messages', controller.getMessagesBySeq);
+
+// Messages for a conversation (LEGACY - uses timestamp pagination)
 router.get('/messages/:conversationId', controller.getMessages);
 
 // Agent session (for testing admin console)

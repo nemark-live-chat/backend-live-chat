@@ -126,8 +126,45 @@ async function runMigration() {
             console.log('   Indexes may already exist');
         }
 
-        // 7. Check if we need to create a test widget
-        console.log('7. Checking for existing widgets...');
+        // 7. Add LastMessageSeq columns for chat realtime optimization
+        console.log('7. Adding LastMessageSeq columns to WidgetConversations...');
+        try {
+            // Add LastMessageSeq column
+            await pool.request().query(`
+        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('iam.WidgetConversations') AND name = 'LastMessageSeq')
+        ALTER TABLE iam.WidgetConversations ADD LastMessageSeq BIGINT NULL
+      `);
+            // Add LastMessagePreview column
+            await pool.request().query(`
+        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('iam.WidgetConversations') AND name = 'LastMessagePreview')
+        ALTER TABLE iam.WidgetConversations ADD LastMessagePreview NVARCHAR(200) NULL
+      `);
+            // Add LastMessageMongoId column
+            await pool.request().query(`
+        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('iam.WidgetConversations') AND name = 'LastMessageMongoId')
+        ALTER TABLE iam.WidgetConversations ADD LastMessageMongoId NVARCHAR(24) NULL
+      `);
+            console.log('   ✓ LastMessage columns added');
+        } catch (e) {
+            console.log('   LastMessage columns may already exist:', e.message);
+        }
+
+        // 8. Create inbox listing index for fast conversation list
+        console.log('8. Creating inbox listing index...');
+        try {
+            await pool.request().query(`
+        IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_WidgetConversations_Widget_LastMessageAt')
+        CREATE NONCLUSTERED INDEX IX_WidgetConversations_Widget_LastMessageAt
+        ON iam.WidgetConversations (WidgetKey, Status, LastMessageAt DESC)
+        INCLUDE (ConversationKey, ConversationId, VisitorId, VisitorName, UpdatedAt, LastMessageSeq, LastMessagePreview)
+      `);
+            console.log('   ✓ Inbox listing index created');
+        } catch (e) {
+            console.log('   Inbox index may already exist:', e.message);
+        }
+
+        // 9. Check if we need to create a test widget
+        console.log('9. Checking for existing widgets...');
         const widgetCheck = await pool.request().query(`SELECT COUNT(*) as count FROM iam.Widgets`);
 
         if (widgetCheck.recordset[0].count === 0) {

@@ -85,7 +85,7 @@ function init(namespace) {
             }
         });
 
-        // Handle message sending (optimized)
+        // Handle message sending (optimized with seq ordering)
         socket.on('embed:message', async (payload, callback) => {
             const startTime = Date.now();
 
@@ -119,29 +119,42 @@ function init(namespace) {
                     socket.conversationId = conv.ConversationId;
                 }
 
-                // Save message to MongoDB and update conversation activity in parallel
-                const [message] = await Promise.all([
-                    embedService.createMessage(
-                        socket.conversationKey,
-                        sanitizedText,
-                        1, // senderType: 1 = visitor
-                        visitorId,
-                        socket.conversationId,
-                        clientMsgId
-                    ),
-                    embedService.updateConversationActivity(socket.conversationKey)
-                ]);
+                // Save message to MongoDB (includes atomic seq allocation and dedup)
+                const message = await embedService.createMessage(
+                    socket.conversationKey,
+                    sanitizedText,
+                    1, // senderType: 1 = visitor
+                    visitorId,
+                    socket.conversationId,
+                    clientMsgId
+                );
 
+                // Update SQL metadata with seq safety (prevents LastMessageSeq from going backwards)
+                // Run in parallel but don't block response
+                embedService.updateConversationActivityWithSeq(
+                    socket.conversationKey,
+                    message.seq,
+                    message.content,
+                    message.messageId
+                ).catch(err => console.error('[Embed] Failed to update conversation activity:', err));
+
+                // CRITICAL: Build response from DB record, NOT from request payload
+                // This ensures "no message mix-up" guarantee
                 const messageData = {
                     id: message.messageId,
-                    text: sanitizedText,
+                    seq: message.seq,
+                    conversationId: socket.conversationId, // Add for context
+                    visitorId: visitorId,                  // Add for context
+                    text: message.content,
                     sender: 'visitor',
-                    senderId: visitorId,
+                    senderType: message.senderType,
+                    senderId: message.senderId || visitorId,
                     createdAt: message.createdAt,
-                    clientMsgId
+                    clientMsgId: message.clientMsgId,
+                    isDuplicate: message.isDuplicate || false
                 };
 
-                // Broadcast to room immediately
+                // Broadcast to room immediately using DB record
                 namespace.to(roomName).emit('embed:message', messageData);
 
                 if (typeof callback === 'function') {
@@ -150,7 +163,7 @@ function init(namespace) {
 
                 const duration = Date.now() - startTime;
                 if (duration > 100) {
-                    console.log(`[Embed] Message from ${visitorId} took ${duration}ms`);
+                    console.log(`[Embed] Message from ${visitorId} took ${duration}ms (seq: ${message.seq})`);
                 }
             } catch (err) {
                 console.error('[Embed] Message error:', err);
@@ -268,8 +281,9 @@ function init(namespace) {
 /**
  * Send message from agent to visitor
  * Called from agent-side endpoints
+ * Uses seq ordering and emits from DB record
  */
-async function sendAgentMessage(siteKey, visitorId, text, agentId, namespace) {
+async function sendAgentMessage(siteKey, visitorId, text, agentId, namespace, clientMsgId = null) {
     const roomName = `embed:${siteKey}:${visitorId}`;
 
     // Get conversation
@@ -278,27 +292,38 @@ async function sendAgentMessage(siteKey, visitorId, text, agentId, namespace) {
         throw new Error('Conversation not found');
     }
 
-    // Save message and update activity in parallel
-    const [message] = await Promise.all([
-        embedService.createMessage(
-            conv.ConversationKey,
-            text,
-            2, // senderType: 2 = agent
-            agentId,
-            conv.ConversationId
-        ),
-        embedService.updateConversationActivity(conv.ConversationKey)
-    ]);
+    // Save message to MongoDB (includes atomic seq allocation and dedup)
+    const message = await embedService.createMessage(
+        conv.ConversationKey,
+        text,
+        2, // senderType: 2 = agent
+        agentId,
+        conv.ConversationId,
+        clientMsgId
+    );
 
+    // Update SQL metadata with seq safety (async, don't block)
+    embedService.updateConversationActivityWithSeq(
+        conv.ConversationKey,
+        message.seq,
+        message.content,
+        message.messageId
+    ).catch(err => console.error('[Embed] Failed to update conversation activity:', err));
+
+    // CRITICAL: Build response from DB record, NOT from request payload
     const messageData = {
         id: message.messageId,
-        text,
+        seq: message.seq,
+        text: message.content,      // Use DB content
         sender: 'agent',
-        senderId: agentId,
-        createdAt: message.createdAt
+        senderType: message.senderType,
+        senderId: message.senderId || agentId,
+        createdAt: message.createdAt,
+        clientMsgId: message.clientMsgId,
+        isDuplicate: message.isDuplicate || false
     };
 
-    // Broadcast to room
+    // Broadcast to room using DB record
     if (namespace) {
         namespace.to(roomName).emit('embed:message', messageData);
     }

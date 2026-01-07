@@ -471,6 +471,14 @@
             let currentSiteKey = null;
             let currentConversation = null;
             let agentToken = null;
+            let conversationsData = []; // Store conversations data locally
+
+            // Track rendered message IDs to prevent duplicates
+            const renderedMessageIds = new Set();
+            // Track pending messages (sent by agent, waiting for socket confirmation)
+            const pendingMessageIds = new Set();
+            // Track joined rooms
+            const joinedRooms = new Set();
 
             // DOM Elements
             const elements = {
@@ -497,7 +505,8 @@
             // ===========================
             // Load Conversations
             // ===========================
-            async function loadConversations() {
+            async function loadConversations(options = {}) {
+                const { reconnectSocket = true } = options;
                 const siteKey = elements.siteKeyInput.value.trim();
                 if (!siteKey) {
                     alert('Please enter a SiteKey');
@@ -511,11 +520,14 @@
                     const data = await response.json();
 
                     if (data.status === 'success') {
-                        renderConversations(data.data.conversations);
+                        conversationsData = data.data.conversations;
+                        renderConversations(conversationsData);
 
-                        // Get agent token and connect socket
-                        await getAgentToken();
-                        connectAgentSocket();
+                        // Only connect socket on initial load, not on refresh
+                        if (reconnectSocket && !socket) {
+                            await getAgentToken();
+                            connectAgentSocket();
+                        }
                     } else {
                         alert('Failed to load conversations: ' + (data.message || 'Unknown error'));
                     }
@@ -551,17 +563,19 @@
                 }
 
                 elements.conversationsList.innerHTML = conversations.map(conv => `
-                <div class="conversation-item" data-id="${conv.id}" data-visitor-id="${conv.visitorId}">
+                <div class="conversation-item ${currentConversation && currentConversation.id === conv.id ? 'active' : ''}" 
+                     data-id="${conv.id}" 
+                     data-visitor-id="${conv.visitorId}">
                     <div class="conversation-header">
                         <div class="visitor-avatar">${(conv.visitorName || conv.visitorId || 'V').charAt(0).toUpperCase()}</div>
                         <div class="visitor-info">
                             <div class="visitor-name">${conv.visitorName || conv.visitorId || 'Anonymous'}</div>
-                            <div class="last-message">${conv.lastMessage || 'No messages yet'}</div>
+                            <div class="last-message" data-conv-id="${conv.id}">${conv.lastMessage || 'No messages yet'}</div>
                         </div>
                     </div>
                     <div class="conversation-meta">
-                        <span>${formatTime(conv.lastMessageAt || conv.createdAt)}</span>
-                        <span class="message-count">${conv.messageCount || 0} msgs</span>
+                        <span class="conv-time" data-conv-id="${conv.id}">${formatTime(conv.lastMessageAt || conv.createdAt)}</span>
+                        <span class="message-count" data-conv-id="${conv.id}">${conv.messageCount || 0} msgs</span>
                     </div>
                 </div>
             `).join('');
@@ -572,6 +586,27 @@
                 });
             }
 
+            /**
+             * Update conversation list item without full re-render
+             */
+            function updateConversationListItem(conversationId, visitorId, lastMessage, time) {
+                const lastMsgEl = elements.conversationsList.querySelector(`.last-message[data-conv-id="${conversationId}"]`);
+                const timeEl = elements.conversationsList.querySelector(`.conv-time[data-conv-id="${conversationId}"]`);
+                const countEl = elements.conversationsList.querySelector(`.message-count[data-conv-id="${conversationId}"]`);
+
+                if (lastMsgEl) {
+                    lastMsgEl.textContent = lastMessage;
+                }
+                if (timeEl) {
+                    timeEl.textContent = formatTime(time);
+                }
+                if (countEl) {
+                    // Extract current count and increment
+                    const currentCount = parseInt(countEl.textContent) || 0;
+                    countEl.textContent = `${currentCount + 1} msgs`;
+                }
+            }
+
             // ===========================
             // Select Conversation
             // ===========================
@@ -580,6 +615,9 @@
                 elements.conversationsList.querySelectorAll('.conversation-item').forEach(item => {
                     item.classList.toggle('active', item.dataset.id === conversationId);
                 });
+
+                // Clear rendered messages for new conversation
+                renderedMessageIds.clear();
 
                 currentConversation = { id: conversationId, visitorId };
 
@@ -593,14 +631,35 @@
                 // Load messages
                 await loadMessages(conversationId);
 
-                // Join socket room
-                if (socket && socket.connected) {
-                    socket.emit('embed:agent-join', {
-                        siteKey: currentSiteKey,
-                        visitorId,
-                        conversationId
-                    });
+                // Join socket room for this conversation
+                joinConversationRoom(visitorId);
+            }
+
+            /**
+             * Join socket room for a specific conversation
+             */
+            function joinConversationRoom(visitorId) {
+                if (!socket || !currentSiteKey) return;
+
+                const roomKey = `${currentSiteKey}:${visitorId}`;
+
+                // Skip if already joined
+                if (joinedRooms.has(roomKey)) {
+                    console.log(`[Agent] Already in room: ${roomKey}`);
+                    return;
                 }
+
+                socket.emit('embed:agent-join', {
+                    siteKey: currentSiteKey,
+                    visitorId
+                }, (response) => {
+                    if (response && response.success) {
+                        joinedRooms.add(roomKey);
+                        console.log(`[Agent] Joined room: ${roomKey}`);
+                    } else {
+                        console.error('[Agent] Failed to join room:', response?.error);
+                    }
+                });
             }
 
             async function loadMessages(conversationId) {
@@ -622,12 +681,19 @@
                     return;
                 }
 
-                elements.chatMessages.innerHTML = messages.map(msg => `
-                <div class="message ${msg.sender}">
-                    <div class="message-bubble">${escapeHtml(msg.text)}</div>
-                    <div class="message-time">${formatTime(msg.createdAt)}</div>
-                </div>
-            `).join('');
+                // Clear and re-render, tracking IDs
+                renderedMessageIds.clear();
+
+                elements.chatMessages.innerHTML = messages.map(msg => {
+                    const msgId = msg.id || msg.clientMsgId || `${msg.createdAt}-${msg.text}`;
+                    renderedMessageIds.add(msgId);
+                    return `
+                    <div class="message ${msg.sender}" data-msg-id="${msgId}">
+                        <div class="message-bubble">${escapeHtml(msg.text)}</div>
+                        <div class="message-time">${formatTime(msg.createdAt)}</div>
+                    </div>
+                `;
+                }).join('');
 
                 scrollToBottom();
             }
@@ -640,6 +706,9 @@
                     socket.disconnect();
                 }
 
+                // Clear joined rooms on reconnect
+                joinedRooms.clear();
+
                 if (!agentToken) {
                     console.warn('No agent token, skipping socket connection');
                     return;
@@ -651,31 +720,78 @@
                 });
 
                 socket.on('connect', () => {
-                    console.log('[Agent] Connected');
+                    console.log('[Agent] Connected, socket id:', socket.id);
                     updateSocketStatus(true);
+
+                    // Re-join current conversation room if any
+                    if (currentConversation && currentConversation.visitorId) {
+                        joinedRooms.clear(); // Clear to force rejoin
+                        joinConversationRoom(currentConversation.visitorId);
+                    }
                 });
 
-                socket.on('disconnect', () => {
-                    console.log('[Agent] Disconnected');
+                socket.on('disconnect', (reason) => {
+                    console.log('[Agent] Disconnected, reason:', reason);
                     updateSocketStatus(false);
+                    joinedRooms.clear();
+                });
+
+                socket.on('reconnect', () => {
+                    console.log('[Agent] Reconnected');
+                    // Re-join rooms
+                    if (currentConversation && currentConversation.visitorId) {
+                        joinedRooms.clear();
+                        joinConversationRoom(currentConversation.visitorId);
+                    }
                 });
 
                 socket.on('embed:message', (message) => {
                     console.log('[Agent] Received message:', message);
 
-                    // If this is for current conversation, add to chat
-                    if (currentConversation) {
+                    const msgId = message.id || message.clientMsgId;
+
+                    // Check if this message was sent by this agent (pending)
+                    if (pendingMessageIds.has(msgId)) {
+                        console.log('[Agent] Message already added as pending, skipping:', msgId);
+                        pendingMessageIds.delete(msgId);
+                        return;
+                    }
+
+                    // Check if message already rendered (dedup)
+                    if (msgId && renderedMessageIds.has(msgId)) {
+                        console.log('[Agent] Duplicate message, skipping:', msgId);
+                        return;
+                    }
+
+                    // Check if this is for current conversation
+                    if (currentConversation &&
+                        (message.conversationId === currentConversation.id ||
+                            message.visitorId === currentConversation.visitorId)) {
                         addMessageToChat(message);
                     }
 
-                    // Refresh conversation list for last message preview
-                    loadConversations();
+                    // Update conversation list item (without full reload)
+                    const convId = message.conversationId;
+                    const visitorId = message.visitorId;
+                    if (convId || visitorId) {
+                        updateConversationListItem(
+                            convId,
+                            visitorId,
+                            message.text,
+                            message.createdAt
+                        );
+                    }
                 });
 
                 socket.on('embed:typing', (data) => {
                     if (data.sender === 'visitor' && currentConversation) {
                         elements.typingIndicator.classList.toggle('active', data.isTyping);
                     }
+                });
+
+                socket.on('connect_error', (error) => {
+                    console.error('[Agent] Connection error:', error.message);
+                    updateSocketStatus(false);
                 });
             }
 
@@ -691,6 +807,12 @@
                 const text = elements.messageInput.value.trim();
                 if (!text || !currentConversation) return;
 
+                // Generate a client message ID to track this message
+                const clientMsgId = `agent-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+
+                // Clear input immediately for better UX
+                elements.messageInput.value = '';
+
                 try {
                     const response = await fetch(`${API_BASE}/api/embed/agent-message`, {
                         method: 'POST',
@@ -699,27 +821,70 @@
                             siteKey: currentSiteKey,
                             visitorId: currentConversation.visitorId,
                             conversationId: currentConversation.id,
-                            text
+                            text,
+                            clientMsgId
                         })
                     });
 
                     if (response.ok) {
-                        elements.messageInput.value = '';
-                        // Message will be added via socket event
+                        const result = await response.json();
+                        const msgData = result.data;
+
+                        // Track this message as pending to avoid duplicate from socket
+                        if (msgData && msgData.id) {
+                            pendingMessageIds.add(msgData.id);
+                        }
+                        if (msgData && msgData.clientMsgId) {
+                            pendingMessageIds.add(msgData.clientMsgId);
+                        }
+
+                        // Add message to chat immediately
+                        addMessageToChat({
+                            id: msgData?.id || clientMsgId,
+                            text: text,
+                            sender: 'agent',
+                            createdAt: msgData?.createdAt || new Date().toISOString(),
+                            clientMsgId: clientMsgId
+                        });
+
+                        // Update conversation list
+                        updateConversationListItem(
+                            currentConversation.id,
+                            currentConversation.visitorId,
+                            text,
+                            new Date().toISOString()
+                        );
+                    } else {
+                        // Restore input on error
+                        elements.messageInput.value = text;
+                        alert('Failed to send message');
                     }
                 } catch (err) {
                     console.error('Send error:', err);
+                    elements.messageInput.value = text;
                     alert('Failed to send message');
                 }
             }
 
             function addMessageToChat(message) {
+                const msgId = message.id || message.clientMsgId || `${message.createdAt}-${message.text}`;
+
+                // Check for duplicate
+                if (renderedMessageIds.has(msgId)) {
+                    console.log('[Agent] Duplicate message in addMessageToChat, skipping:', msgId);
+                    return;
+                }
+
                 // Remove empty state if exists
                 const emptyState = elements.chatMessages.querySelector('.chat-empty');
                 if (emptyState) emptyState.remove();
 
+                // Add to tracking set
+                renderedMessageIds.add(msgId);
+
                 const messageEl = document.createElement('div');
                 messageEl.className = `message ${message.sender}`;
+                messageEl.dataset.msgId = msgId;
                 messageEl.innerHTML = `
                 <div class="message-bubble">${escapeHtml(message.text)}</div>
                 <div class="message-time">${formatTime(message.createdAt)}</div>
@@ -755,10 +920,17 @@
             }
 
             // ===========================
+            // Refresh Conversations (without socket reconnect)
+            // ===========================
+            async function refreshConversations() {
+                await loadConversations({ reconnectSocket: false });
+            }
+
+            // ===========================
             // Event Listeners
             // ===========================
             elements.loadBtn.addEventListener('click', loadConversations);
-            elements.refreshBtn.addEventListener('click', loadConversations);
+            elements.refreshBtn.addEventListener('click', refreshConversations);
             elements.sendBtn.addEventListener('click', sendMessage);
 
             elements.siteKeyInput.addEventListener('keypress', (e) => {
