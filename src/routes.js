@@ -3,6 +3,11 @@ const router = express.Router();
 
 // Mount Auth Module
 router.use('/auth', require('./modules/auth/auth.routes'));
+
+// Mount Workspaces Module (no workspace context required)
+router.use('/workspaces', require('./modules/workspaces/workspaces.routes'));
+
+// Mount Widgets Module (requires workspace context)
 router.use('/widgets', require('./modules/widgets/widgets.routes'));
 router.use('/public/widgets', require('./modules/public_widget/publicWidget.routes'));
 
