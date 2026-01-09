@@ -10,7 +10,7 @@ const env = require('../../config/env');
 // Configuration
 const BACKEND_PUBLIC_URL = env.urls?.backend || process.env.BACKEND_PUBLIC_URL || 'http://localhost:3001';
 const FRONTEND_PUBLIC_URL = env.urls?.frontend || process.env.FRONTEND_PUBLIC_URL || 'http://localhost:3000';
-const WIDGET_VERSION = '2.0.0';
+const WIDGET_VERSION = '2.0.1';
 
 // Cache for widget script
 let widgetScriptCache = null;
@@ -63,7 +63,7 @@ const getWidgetScript = (req, res) => {
     // Set headers
     res.set({
       'Content-Type': 'application/javascript; charset=utf-8',
-      'Cache-Control': 'public, max-age=86400', // 1 day
+      'Cache-Control': 'no-cache, must-revalidate', // Force ETag validation
       'ETag': `"${widgetScriptEtag}"`,
       'X-Widget-Version': WIDGET_VERSION,
       'Access-Control-Allow-Origin': '*'
@@ -96,7 +96,7 @@ const getWidgetScriptMinified = (req, res) => {
 
     res.set({
       'Content-Type': 'application/javascript; charset=utf-8',
-      'Cache-Control': 'public, max-age=604800', // 7 days
+      'Cache-Control': 'public, max-age=3600', // 1 hour
       'ETag': `"${minEtag}"`,
       'X-Widget-Version': WIDGET_VERSION,
       'Access-Control-Allow-Origin': '*'

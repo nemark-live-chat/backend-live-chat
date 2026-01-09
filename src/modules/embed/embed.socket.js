@@ -164,13 +164,14 @@ function init(namespace) {
         // Handle join event (explicit join with optional visitor name)
         socket.on('embed:join', async (payload, callback) => {
             try {
-                const { visitorName } = payload || {};
+                const { visitorName, sourceUrl } = payload || {};
 
                 // Get or create conversation
                 const result = await embedService.getOrCreateConversation(
                     widgetKey,
                     visitorId,
-                    visitorName
+                    visitorName,
+                    sourceUrl
                 );
 
                 // Store conversationId in socket for later use

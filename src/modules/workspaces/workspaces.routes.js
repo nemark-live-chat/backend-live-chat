@@ -57,6 +57,20 @@ router.use('/:workspaceId', (req, res, next) => {
     next();
 }, requireWorkspaceMember);
 
+/**
+ * PATCH /api/workspaces/:workspaceId
+ * Update workspace settings
+ * Requires: workspace.manage permission
+ */
+router.patch('/:workspaceId',
+    authorize('workspace.manage'),
+    validate(schema.updateWorkspace),
+    controller.updateWorkspace
+);
+
+// --- WIDGETS ---
+router.use('/:workspaceId/widgets', require('../widgets/widgets.routes'));
+
 // --- INVITES ---
 
 /**

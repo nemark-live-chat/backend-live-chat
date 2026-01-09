@@ -124,7 +124,7 @@ const verifySessionToken = (token) => {
  * @param {string} visitorName - Optional visitor name
  * @returns {object} Conversation info
  */
-const getOrCreateConversation = async (widgetKey, visitorId, visitorName = null) => {
+const getOrCreateConversation = async (widgetKey, visitorId, visitorName = null, sourceUrl = null) => {
   const pool = getPool();
 
   // First try to find existing open conversation
@@ -132,7 +132,7 @@ const getOrCreateConversation = async (widgetKey, visitorId, visitorName = null)
     .input('widgetKey', sql.BigInt, widgetKey)
     .input('visitorId', sql.NVarChar, visitorId)
     .query(`
-      SELECT ConversationKey, ConversationId, VisitorName
+      SELECT ConversationKey, ConversationId, VisitorName, SourceUrl
       FROM iam.WidgetConversations
       WHERE WidgetKey = @widgetKey 
         AND VisitorId = @visitorId 
@@ -141,17 +141,28 @@ const getOrCreateConversation = async (widgetKey, visitorId, visitorName = null)
 
   if (existingResult.recordset.length > 0) {
     const conv = existingResult.recordset[0];
+    let needsUpdate = false;
+    const request = pool.request()
+      .input('conversationKey', sql.BigInt, conv.ConversationKey);
 
-    // Update visitor name if provided and different
+    let updateSql = 'UPDATE iam.WidgetConversations SET UpdatedAt = SYSUTCDATETIME()';
+
+    // Update visitor name if provided
     if (visitorName && visitorName !== conv.VisitorName) {
-      await pool.request()
-        .input('conversationKey', sql.BigInt, conv.ConversationKey)
-        .input('visitorName', sql.NVarChar, visitorName)
-        .query(`
-          UPDATE iam.WidgetConversations 
-          SET VisitorName = @visitorName, UpdatedAt = SYSUTCDATETIME()
-          WHERE ConversationKey = @conversationKey
-        `);
+      updateSql += ', VisitorName = @visitorName';
+      request.input('visitorName', sql.NVarChar, visitorName);
+      needsUpdate = true;
+    }
+
+    // Update source URL if provided (update to latest)
+    if (sourceUrl && sourceUrl !== conv.SourceUrl) {
+      updateSql += ', SourceUrl = @sourceUrl';
+      request.input('sourceUrl', sql.NVarChar, sourceUrl);
+      needsUpdate = true;
+    }
+
+    if (needsUpdate) {
+      await request.query(`${updateSql} WHERE ConversationKey = @conversationKey`);
     }
 
     return {
@@ -166,10 +177,11 @@ const getOrCreateConversation = async (widgetKey, visitorId, visitorName = null)
     .input('widgetKey', sql.BigInt, widgetKey)
     .input('visitorId', sql.NVarChar, visitorId)
     .input('visitorName', sql.NVarChar, visitorName)
+    .input('sourceUrl', sql.NVarChar, sourceUrl)
     .query(`
-      INSERT INTO iam.WidgetConversations (WidgetKey, VisitorId, VisitorName, Status, LastMessageAt)
+      INSERT INTO iam.WidgetConversations (WidgetKey, VisitorId, VisitorName, Status, LastMessageAt, SourceUrl)
       OUTPUT inserted.ConversationKey, inserted.ConversationId
-      VALUES (@widgetKey, @visitorId, @visitorName, 1, SYSUTCDATETIME())
+      VALUES (@widgetKey, @visitorId, @visitorName, 1, SYSUTCDATETIME(), @sourceUrl)
     `);
 
   return {
@@ -440,6 +452,7 @@ const listConversationsForUser = async (userKey, limit = 50) => {
         c.Status as status,
         c.CreatedAt as createdAt,
         c.LastMessageAt as lastMessageAt,
+        c.SourceUrl as domain,
         w.SiteKey as siteKey,
         w.Name as widgetName,
         ws.Name as workspaceName,

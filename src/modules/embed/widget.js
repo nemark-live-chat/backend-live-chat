@@ -246,6 +246,7 @@
       '?siteKey=' + encodeURIComponent(siteKey) +
       '&visitorId=' + encodeURIComponent(visitorId) +
       '&title=' + encodeURIComponent(config.title) +
+      '&sourceUrl=' + encodeURIComponent(window.location.href) +
       '&t=' + Date.now();
 
     iframe.src = iframeSrc;

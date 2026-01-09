@@ -87,8 +87,11 @@ const updateWorkspace = Joi.object({
             return value ? value.replace(/\s+/g, ' ') : value;
         }),
     // Add more settings as needed
-    // timezone: Joi.string().optional(),
     // brandColor: Joi.string().pattern(/^#([0-9A-F]{3}){1,2}$/i).optional(),
+    settings: Joi.alternatives().try(
+        Joi.object(),
+        Joi.string()
+    ).optional(),
 }).min(1).messages({
     'object.min': 'At least one field is required for update',
 });

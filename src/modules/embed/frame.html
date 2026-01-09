@@ -488,7 +488,8 @@
                 siteKey: urlParams.get('siteKey'),
                 visitorId: urlParams.get('visitorId'),
                 theme: urlParams.get('theme') || 'light',
-                title: urlParams.get('title') || 'Support'
+                title: urlParams.get('title') || 'Support',
+                sourceUrl: urlParams.get('sourceUrl') || ''
             };
 
             // Validate required params
@@ -599,7 +600,7 @@
                     updateConnectionStatus('connected');
 
                     // Join conversation
-                    socket.emit('embed:join', {}, (response) => {
+                    socket.emit('embed:join', { sourceUrl: config.sourceUrl }, (response) => {
                         if (response.success) {
                             conversationId = response.data.conversationId;
                             console.log('[Chat] Joined conversation:', conversationId);
@@ -801,7 +802,7 @@
                 elements.sendButton.disabled = true;
 
                 // Send via socket
-                socket.emit('embed:message', { text, clientMsgId }, (response) => {
+                socket.emit('embed:message', { text, clientMsgId, sourceUrl: config.sourceUrl }, (response) => {
                     if (!response.success) {
                         console.error('[Chat] Send failed:', response.error);
                         // Could mark message as failed
