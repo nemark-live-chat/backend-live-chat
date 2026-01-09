@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const controller = require('./embed.controller');
 const { strictRateLimiter, widgetRateLimiter } = require('../../middlewares/rateLimit');
+const authenticate = require('../../middlewares/authenticate');
 
 // ============================================
 // PUBLIC ROUTES - No authentication required
@@ -29,8 +30,9 @@ router.get('/admin', controller.getAdmin);
 // Session endpoint for visitors (rate limited)
 router.post('/session', strictRateLimiter, controller.createSession);
 
-// Conversations list (for agents)
-router.get('/conversations', controller.getConversations);
+// Conversations list (for agents) - Unified Inbox support (Requires Auth)
+// This enables agents to see conversations across ALL their workspaces
+router.get('/conversations', authenticate, controller.getConversations);
 
 // Messages for a conversation with keyset cursor pagination (RECOMMENDED)
 router.get('/conversations/:conversationId/messages', controller.getMessagesBySeq);
@@ -45,4 +47,3 @@ router.post('/agent-session', controller.createAgentSession);
 router.post('/agent-message', widgetRateLimiter, controller.sendAgentMessage);
 
 module.exports = router;
-

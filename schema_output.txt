@@ -1,0 +1,10 @@
+--- COLUMNS ---
+ConversationKey (bigint)
+ConversationId (uniqueidentifier)
+WidgetKey (bigint)
+VisitorId (nvarchar)
+VisitorName (nvarchar)
+Status (tinyint)
+CreatedAt (datetime2)
+UpdatedAt (datetime2)
+LastMessageAt (datetime2)

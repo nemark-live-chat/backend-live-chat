@@ -309,17 +309,52 @@ const getConfig = asyncHandler(async (req, res) => {
   const origin = req.headers.origin || req.query.host;
 
   const widget = await service.getWidgetConfig(widgetId);
-  
+
   if (!widget || widget.Status !== 1) {
     throw new AppError('Widget not found or disabled', 404);
   }
 
   const allowedDomains = JSON.parse(widget.AllowedDomains);
   // Normalize origin: remove trailing slash
-  const cleanOrigin = origin ? origin.replace(/\/$/, '') : '';
-  
-  if (!allowedDomains.some(d => d.replace(/\/$/, '') === cleanOrigin)) {
-    throw new AppError('Domain not allowed', 403);
+  const cleanOrigin = origin ? origin.replace(/\/$/, '').toLowerCase() : '';
+
+  // Check if domain is allowed
+  const isDomainAllowed = allowedDomains.some(d => {
+    const domainPattern = d.replace(/\/$/, '').toLowerCase();
+
+    // Wildcard allows all domains (for development)
+    if (domainPattern === '*') return true;
+
+    // Exact match
+    if (cleanOrigin === domainPattern) return true;
+
+    // Match with protocol prefix
+    if (cleanOrigin === 'http://' + domainPattern) return true;
+    if (cleanOrigin === 'https://' + domainPattern) return true;
+
+    // Match localhost variants (localhost:3000 also matches 127.0.0.1:3000)
+    const localhostVariants = ['localhost', '127.0.0.1'];
+    for (const variant of localhostVariants) {
+      if (domainPattern.includes(variant)) {
+        const port = domainPattern.split(':')[1] || '';
+        for (const v of localhostVariants) {
+          const testDomain = port ? `${v}:${port}` : v;
+          if (cleanOrigin === testDomain ||
+            cleanOrigin === 'http://' + testDomain ||
+            cleanOrigin === 'https://' + testDomain) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  });
+
+  if (!isDomainAllowed) {
+    const error = new AppError(`Domain not allowed: ${cleanOrigin}. Allowed: ${allowedDomains.join(', ')}`, 403);
+    error.code = 'DOMAIN_NOT_ALLOWED';
+    throw error;
   }
 
   res.status(200).json({
@@ -335,21 +370,30 @@ const getConfig = asyncHandler(async (req, res) => {
 const postMessage = asyncHandler(async (req, res) => {
   const { widgetId } = req.params;
   const { visitorId, content, url, conversationId } = req.body;
-  
+
   // Basic Origin Check (Duplicate logic, ideally in middleware or service)
   const origin = req.headers.origin || (url ? new URL(url).origin : '');
   const widget = await service.getWidgetConfig(widgetId);
   if (!widget) throw new AppError('Widget not found', 404);
-  
+
   const allowedDomains = JSON.parse(widget.AllowedDomains);
   const cleanOrigin = origin ? origin.replace(/\/$/, '') : '';
-  
-  if (!allowedDomains.some(d => d.replace(/\/$/, '') === cleanOrigin)) {
-    throw new AppError('Domain not allowed', 403);
+
+  if (!allowedDomains.some(d => {
+    const domainPattern = d.replace(/\/$/, '').toLowerCase();
+    const cleanOriginLower = cleanOrigin.toLowerCase();
+    return cleanOriginLower === domainPattern ||
+      cleanOriginLower.endsWith('://' + domainPattern) ||
+      cleanOriginLower === 'http://' + domainPattern ||
+      cleanOriginLower === 'https://' + domainPattern;
+  })) {
+    const error = new AppError('Domain not allowed', 403);
+    error.code = 'DOMAIN_NOT_ALLOWED';
+    throw error;
   }
 
   const result = await service.createMessage(widget.WidgetKey, { visitorId, content, conversationId });
-  
+
   res.status(201).json({ status: 'success', data: result });
 });
 

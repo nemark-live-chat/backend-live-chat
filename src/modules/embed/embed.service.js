@@ -52,13 +52,23 @@ const validateOrigin = (widget, origin) => {
     return allowedDomains.some(domain => {
       const normalizedDomain = domain.replace(/\/$/, '').toLowerCase();
 
-      // Exact match
+      // Check exact match (e.g. https://example.com)
       if (normalizedDomain === normalizedOrigin) return true;
+
+      // Check without protocol (e.g. example.com matches http://example.com)
+      const originNoProtocol = normalizedOrigin.replace(/^https?:\/\//, '');
+      if (normalizedDomain === originNoProtocol) return true;
 
       // Wildcard match (e.g., *.example.com)
       if (normalizedDomain.startsWith('*')) {
         const pattern = normalizedDomain.replace('*', '.*');
         return new RegExp(`^${pattern}$`).test(normalizedOrigin);
+      }
+
+      // Wildcard without protocol
+      if (normalizedDomain.startsWith('*')) {
+        const pattern = normalizedDomain.replace('*', '.*');
+        return new RegExp(`^${pattern}$`).test(originNoProtocol);
       }
 
       return false;
@@ -281,26 +291,18 @@ const updateConversationActivity = async (conversationKey) => {
  */
 const updateConversationActivityWithSeq = async (conversationKey, seq, content, mongoId = null) => {
   const pool = getPool();
-  const preview = content ? content.substring(0, 200) : null;
+  // Note: LastMessageSeq, LastMessagePreview, LastMessageMongoId are NOT in SQL table.
+  // We only update timestamps. 'seq' check is skipped as column missing.
 
   await pool.request()
     .input('conversationKey', sql.BigInt, conversationKey)
-    .input('seq', sql.BigInt, seq)
-    .input('preview', sql.NVarChar, preview)
-    .input('mongoId', sql.NVarChar, mongoId)
     .query(`
       UPDATE iam.WidgetConversations 
       SET 
         LastMessageAt = SYSUTCDATETIME(), 
-        UpdatedAt = SYSUTCDATETIME(),
-        LastMessageSeq = @seq,
-        LastMessagePreview = @preview,
-        LastMessageMongoId = @mongoId
+        UpdatedAt = SYSUTCDATETIME()
       WHERE ConversationKey = @conversationKey
-        AND (LastMessageSeq IS NULL OR @seq > LastMessageSeq)
     `);
-  // Note: condition "@seq > LastMessageSeq" prevents seq from going backwards
-  // when messages arrive out-of-order due to network delays
 };
 
 /**
@@ -418,6 +420,56 @@ const getConversationById = async (conversationId) => {
   return result.recordset[0] || null;
 };
 
+/**
+ * List all conversations for a user across all workspaces
+ * @param {number} userKey - User key
+ * @param {number} limit - Max conversations
+ * @returns {array} Conversations with message previews
+ */
+const listConversationsForUser = async (userKey, limit = 50) => {
+  const pool = getPool();
+
+  const result = await pool.request()
+    .input('userKey', sql.BigInt, userKey)
+    .input('limit', sql.Int, limit)
+    .query(`
+      SELECT 
+        c.ConversationId as id,
+        c.VisitorId as visitorId,
+        c.VisitorName as visitorName,
+        c.Status as status,
+        c.CreatedAt as createdAt,
+        c.LastMessageAt as lastMessageAt,
+        w.SiteKey as siteKey,
+        w.Name as widgetName,
+        ws.Name as workspaceName,
+        ws.WorkspaceId as workspaceId
+      FROM iam.WidgetConversations c
+      INNER JOIN iam.Widgets w ON c.WidgetKey = w.WidgetKey
+      INNER JOIN iam.Workspaces ws ON w.WorkspaceKey = ws.WorkspaceKey
+      INNER JOIN iam.Memberships m ON m.WorkspaceKey = ws.WorkspaceKey
+      WHERE m.UserKey = @userKey AND m.Status = 1
+      ORDER BY c.LastMessageAt DESC
+      OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY
+    `);
+
+  const conversations = result.recordset;
+
+  if (conversations.length === 0) {
+    return [];
+  }
+
+  // Get message info from MongoDB
+  const conversationIds = conversations.map(c => c.id);
+  const messageInfo = await messageService.getConversationMessageInfo(conversationIds);
+
+  return conversations.map(conv => ({
+    ...conv,
+    lastMessage: messageInfo[conv.id]?.lastMessage || null,
+    messageCount: messageInfo[conv.id]?.messageCount || 0
+  }));
+};
+
 module.exports = {
   getWidgetBySiteKey,
   validateOrigin,
@@ -433,5 +485,6 @@ module.exports = {
   updateConversationActivityWithSeq,
   listConversations,
   listConversationsBySiteKey,
+  listConversationsForUser,
   getConversationById
 };

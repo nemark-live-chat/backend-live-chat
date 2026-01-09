@@ -1,5 +1,6 @@
 const { connectSql } = require('../infra/sql/pool');
 const { connectMongo } = require('../infra/mongo/mongo');
+const { runAutoSeed } = require('../infra/sql/autoSeed');
 const createApp = require('./express');
 const { initSocket } = require('./socket');
 const env = require('../config/env');
@@ -12,6 +13,9 @@ async function start() {
       connectSql(),
       connectMongo(),
     ]);
+
+    // 1.5. Auto-seed permissions and schema updates
+    await runAutoSeed();
 
     // 2. Initialize App
     const app = createApp();

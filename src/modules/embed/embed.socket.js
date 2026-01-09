@@ -4,6 +4,7 @@
  * Optimized for high message volume
  */
 const embedService = require('./embed.service');
+const widgetsService = require('../widgets/widgets.service');
 
 // Store for typing indicators (in-memory, can be upgraded to Redis)
 const typingUsers = new Map();
@@ -35,8 +36,120 @@ function processMessageQueue(socket, namespace) {
  * Initialize embed namespace handlers
  * @param {Namespace} namespace - Socket.IO namespace
  */
+/**
+ * Initialize embed namespace handlers
+ * @param {Namespace} namespace - Socket.IO namespace
+ */
 function init(namespace) {
-    namespace.on('connection', (socket) => {
+    namespace.on('connection', async (socket) => {
+        // ============================================
+        // UNIFIED AGENT CONNECTION
+        // ============================================
+        if (socket.agentData && socket.agentData.isAgent) {
+            const { userKey } = socket.agentData;
+            console.log(`[Embed] Unified Agent connected: ${userKey}`);
+
+            try {
+                // Auto-join rooms for all sites the agent has access to
+                const widgets = await widgetsService.getWidgetsByUser(userKey);
+
+                if (widgets.length === 0) {
+                    console.warn(`[Embed] Warning: No active widgets found for Agent ${userKey}. Real-time updates may fail.`);
+                }
+
+                let count = 0;
+                widgets.forEach(w => {
+                    const skid = w.SiteKey.toLowerCase();
+                    socket.join(`agent:site:${skid}`);
+                    count++;
+                });
+                console.log(`[Embed] Agent ${userKey} joined ${count} site rooms`);
+
+                // Event: Agent explicitly joining a conversation (e.g. for typing events)
+                socket.on('embed:agent-join', (payload, callback) => {
+                    const { siteKey, visitorId } = payload || {};
+                    if (siteKey && visitorId) {
+                        const roomName = `embed:${siteKey}:${visitorId}`;
+                        socket.join(roomName);
+                        if (typeof callback === 'function') callback({ success: true, room: roomName });
+                    }
+                });
+
+                // Agent might want to leave a conversation room
+                socket.on('embed:agent-leave', (payload) => {
+                    const { siteKey, visitorId } = payload || {};
+                    if (siteKey && visitorId) {
+                        socket.leave(`embed:${siteKey}:${visitorId}`);
+                    }
+                });
+
+                // Agent sending message (Unified Inbox)
+                socket.on('embed:agent-message', async (payload, callback) => {
+                    try {
+                        const { text, conversationId, siteKey, visitorId, clientMsgId } = payload;
+                        if (!text || !conversationId) throw new Error('Invalid payload');
+
+                        const conv = await embedService.getConversationById(conversationId);
+                        if (!conv) throw new Error('Conversation not found');
+
+                        // Create message (Type 2 = Agent)
+                        const message = await embedService.createMessage(
+                            conv.ConversationKey,
+                            text,
+                            2, // Sender: Agent
+                            userKey, // SenderId: Agent UserKey
+                            conversationId,
+                            clientMsgId
+                        );
+
+                        // Update activity
+                        embedService.updateConversationActivityWithSeq(
+                            conv.ConversationKey,
+                            message.seq,
+                            message.content,
+                            message.messageId
+                        ).catch(console.error);
+
+                        const messageData = {
+                            id: message.messageId,
+                            seq: message.seq,
+                            conversationId: conversationId,
+                            visitorId: visitorId,
+                            text: message.content,
+                            sender: 'agent',
+                            senderType: 2,
+                            senderId: userKey,
+                            createdAt: message.createdAt,
+                            clientMsgId: message.clientMsgId,
+                            siteKey: siteKey
+                        };
+
+                        // Broadcast to conversation room (Visitor sees this)
+                        const roomName = `embed:${siteKey}:${visitorId}`;
+                        namespace.to(roomName).emit('embed:message', messageData);
+
+                        // Broadcast to other Agents
+                        const normalizedSiteKey = siteKey.toLowerCase();
+                        const agentRoom = `agent:site:${normalizedSiteKey}`;
+                        namespace.to(agentRoom).emit('embed:message', messageData);
+
+                        if (typeof callback === 'function') callback({ success: true, data: messageData });
+                    } catch (err) {
+                        console.error('[Embed] Agent message error:', err);
+                        if (typeof callback === 'function') callback({ success: false, error: err.message });
+                    }
+                });
+
+            } catch (err) {
+                console.error('[Embed] Agent join error:', err);
+                socket.emit('embed:error', { message: 'Failed to access workspaces' });
+            }
+            return;
+        }
+
+        // ============================================
+        // VISITOR CONNECTION
+        // ============================================
         const { siteKey, visitorId, widgetKey } = socket.embedData;
         const roomName = `embed:${siteKey}:${visitorId}`;
 
@@ -74,6 +187,10 @@ function init(namespace) {
                 }
 
                 socket.emit('embed:joined', response);
+
+                // Notify Agents (Unified)
+                // New conversation or visitor join - good to notify agent list if we had a "conversation:update" event
+                // For now, strictly sticking to requested message flow
 
                 console.log(`[Embed] Visitor ${visitorId} joined conversation ${result.conversationId}`);
             } catch (err) {
@@ -151,11 +268,24 @@ function init(namespace) {
                     senderId: message.senderId || visitorId,
                     createdAt: message.createdAt,
                     clientMsgId: message.clientMsgId,
-                    isDuplicate: message.isDuplicate || false
+                    isDuplicate: message.isDuplicate || false,
+                    siteKey: siteKey // Useful for Unified Agents to know which site
                 };
 
                 // Broadcast to room immediately using DB record
                 namespace.to(roomName).emit('embed:message', messageData);
+
+                // Broadcast to Unified Agents watching this site
+                const normalizedSiteKey = siteKey.toLowerCase();
+                const agentRoom = `agent:site:${normalizedSiteKey}`;
+                const roomSize = namespace.adapter.rooms.get(agentRoom)?.size || 0;
+                console.log(`[Embed] Broadcasting to agent room: ${agentRoom} (Sockets: ${roomSize})`);
+
+                if (roomSize > 0) {
+                    namespace.to(agentRoom).emit('embed:message', messageData);
+                } else {
+                    console.log(`[Embed] No agents in room ${agentRoom}, skipping broadcast`);
+                }
 
                 if (typeof callback === 'function') {
                     callback({ success: true, data: messageData });
@@ -216,12 +346,17 @@ function init(namespace) {
         // Handle typing indicator
         socket.on('embed:typing', (payload) => {
             const { isTyping } = payload || {};
-            // Broadcast to room
-            socket.to(roomName).emit('embed:typing', {
+            const event = {
                 visitorId,
                 isTyping: !!isTyping,
-                sender: 'visitor'
-            });
+                sender: 'visitor',
+                siteKey // Add siteKey for agents
+            };
+
+            // Broadcast to room
+            socket.to(roomName).emit('embed:typing', event);
+            // Broadcast to agents
+            socket.to(`agent:site:${siteKey}`).emit('embed:typing', event);
         });
 
         // Handle seen/read receipt
@@ -240,30 +375,11 @@ function init(namespace) {
 
         // Handle agent joining a specific conversation room
         socket.on('embed:agent-join', async (payload, callback) => {
-            try {
-                const { siteKey: targetSiteKey, visitorId: targetVisitorId } = payload || {};
-
-                if (!targetSiteKey || !targetVisitorId) {
-                    if (typeof callback === 'function') {
-                        callback({ success: false, error: 'siteKey and visitorId required' });
-                    }
-                    return;
-                }
-
-                const targetRoomName = `embed:${targetSiteKey}:${targetVisitorId}`;
-                socket.join(targetRoomName);
-
-                console.log(`[Embed] Agent joined room: ${targetRoomName}`);
-
-                if (typeof callback === 'function') {
-                    callback({ success: true, room: targetRoomName });
-                }
-            } catch (err) {
-                console.error('[Embed] Agent join error:', err);
-                if (typeof callback === 'function') {
-                    callback({ success: false, error: err.message });
-                }
-            }
+            // Leave empty for visitor mode, they cannot join other rooms
+            // Security: maybe verify if visitor allowed? 
+            // Currently this event was likely copy-pasted or intended for agent logic which is now separated.
+            // We can ignore it or return error for visitors.
+            if (typeof callback === 'function') callback({ success: false, error: 'Not allowed' });
         });
 
         // Handle disconnect
@@ -326,6 +442,8 @@ async function sendAgentMessage(siteKey, visitorId, text, agentId, namespace, cl
     // Broadcast to room using DB record
     if (namespace) {
         namespace.to(roomName).emit('embed:message', messageData);
+        // Also broadcast to unified agents
+        namespace.to(`agent:site:${siteKey}`).emit('embed:message', messageData);
     }
 
     return messageData;

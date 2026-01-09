@@ -80,16 +80,16 @@ const doc = {
         "description": "Revoke current refresh token.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
-            {
-                "name": "body",
-                "in": "body",
-                "schema": {
-                    "type": "object",
-                     "properties": {
-                        "refreshToken": { "type": "string" }
-                     }
-                }
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "refreshToken": { "type": "string" }
+              }
             }
+          }
         ],
         "responses": {
           "200": { "description": "OK" }
@@ -166,205 +166,451 @@ const doc = {
       }
     },
     "/api/auth/forgot-password": {
-        "post": {
-          "tags": ["Auth"],
-          "summary": "Forgot Password",
-          "parameters": [
-            {
-              "name": "body",
-              "in": "body",
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "email": { "type": "string" }
-                }
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Forgot Password",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "email": { "type": "string" }
               }
             }
-          ],
-          "responses": {
-            "200": { "description": "OK" }
           }
+        ],
+        "responses": {
+          "200": { "description": "OK" }
         }
-      },
-      "/api/auth/reset-password": {
-        "post": {
-          "tags": ["Auth"],
-          "summary": "Reset Password",
-          "parameters": [
-            {
-              "name": "body",
-              "in": "body",
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "token": { "type": "string" },
-                  "newPassword": { "type": "string" },
-                  "confirmPassword": { "type": "string" }
-                }
+      }
+    },
+    "/api/auth/reset-password": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Reset Password",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "token": { "type": "string" },
+                "newPassword": { "type": "string" },
+                "confirmPassword": { "type": "string" }
               }
             }
-          ],
-          "responses": {
-            "200": { "description": "OK" }
           }
+        ],
+        "responses": {
+          "200": { "description": "OK" }
         }
-      },
+      }
+    },
     "/api/auth/sessions": {
-        "get": {
-          "tags": ["Auth"],
-          "summary": "List Sessions",
-          "security": [{ "bearerAuth": [] }],
-          "responses": {
-            "200": { "description": "OK" }
-          }
+      "get": {
+        "tags": ["Auth"],
+        "summary": "List Sessions",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "OK" }
         }
-      },
+      }
+    },
     "/api/auth/sessions/{sessionId}": {
-        "delete": {
-          "tags": ["Auth"],
-          "summary": "Revoke Session",
-          "security": [{ "bearerAuth": [] }],
-          "parameters": [
-            {
-              "name": "sessionId",
-              "in": "path",
-              "required": true,
-              "type": "string"
+      "delete": {
+        "tags": ["Auth"],
+        "summary": "Revoke Session",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": { "description": "OK" }
+        }
+      }
+    },
+    "/api/workspaces": {
+      "post": {
+        "tags": ["Workspaces"],
+        "summary": "Create Workspace",
+        "description": "Create a new workspace. The authenticated user becomes the Owner with full permissions.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 3,
+                  "maxLength": 255,
+                  "description": "Workspace name (3-255 characters)"
+                }
+              },
+              "required": ["name"]
             }
-          ],
-          "responses": {
-            "200": { "description": "OK" }
           }
-        }
-      },
-      "/widget.js": {
-        "get": {
-          "tags": ["Public Widget"],
-          "summary": "Get Widget Script",
-          "description": "Returns the vanilla JS chat widget script.",
-          "produces": ["application/javascript"],
-          "responses": {
-            "200": { "description": "JavaScript Code" }
-          }
-        }
-      },
-      "/api/widgets": {
-        "post": {
-          "tags": ["Widgets"],
-          "summary": "Create Widget",
-          "security": [{ "bearerAuth": [] }],
-          "parameters": [
-            {
-              "name": "x-workspace-id",
-              "in": "header",
-              "required": true,
-              "type": "string"
-            },
-            {
-              "name": "body",
-              "in": "body",
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": { "type": "string" },
-                  "allowedDomains": { "type": "array", "items": { "type": "string" } },
-                  "theme": { 
-                    "type": "object",
-                    "properties": {
-                      "title": { "type": "string" },
-                      "subtitle": { "type": "string" },
-                      "color": { "type": "string" },
-                      "position": { "type": "string", "enum": ["br", "bl"] },
-                      "autoOpen": { "type": "boolean" }
+        ],
+        "responses": {
+          "201": {
+            "description": "Workspace created successfully",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": { "type": "string", "example": "success" },
+                "data": {
+                  "type": "object",
+                  "properties": {
+                    "workspace": {
+                      "type": "object",
+                      "properties": {
+                        "workspaceKey": { "type": "integer" },
+                        "workspaceId": { "type": "string", "format": "uuid" },
+                        "name": { "type": "string" },
+                        "status": { "type": "integer" },
+                        "createdAt": { "type": "string", "format": "date-time" }
+                      }
+                    },
+                    "membership": {
+                      "type": "object",
+                      "properties": {
+                        "membershipKey": { "type": "integer" },
+                        "membershipId": { "type": "string", "format": "uuid" },
+                        "role": { "type": "string", "example": "Owner" }
+                      }
                     }
                   }
                 }
               }
             }
-          ],
-          "responses": { "201": { "description": "Created" } }
+          },
+          "400": { "description": "Validation Error - Invalid name" },
+          "401": { "description": "Unauthorized - No token provided" },
+          "500": { "description": "Server Error - Permission seed missing" }
         }
       },
-      "/api/widgets/{widgetId}": {
-        "get": {
-          "tags": ["Widgets"],
-          "summary": "Get Widget",
-          "security": [{ "bearerAuth": [] }],
-          "parameters": [
-            { "name": "x-workspace-id", "in": "header", "required": true, "type": "string" },
-            { "name": "widgetId", "in": "path", "required": true, "type": "string" }
-          ],
-          "responses": { "200": { "description": "OK" } }
-        },
-        "patch": {
-          "tags": ["Widgets"],
-          "summary": "Update Widget",
-          "security": [{ "bearerAuth": [] }],
-          "parameters": [
-            { "name": "x-workspace-id", "in": "header", "required": true, "type": "string" },
-            { "name": "widgetId", "in": "path", "required": true, "type": "string" },
-            {
-              "name": "body",
-              "in": "body",
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": { "type": "string" },
-                  "status": { "type": "integer" },
-                  "allowedDomains": { "type": "array", "items": { "type": "string" } },
-                  "theme": { "type": "object" }
+      "get": {
+        "tags": ["Workspaces"],
+        "summary": "List Workspaces",
+        "description": "Get all workspaces the authenticated user is a member of.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of workspaces",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": { "type": "string", "example": "success" },
+                "data": {
+                  "type": "object",
+                  "properties": {
+                    "workspaces": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "workspaceKey": { "type": "integer" },
+                          "workspaceId": { "type": "string", "format": "uuid" },
+                          "name": { "type": "string" },
+                          "status": { "type": "integer" },
+                          "createdAt": { "type": "string", "format": "date-time" },
+                          "membership": {
+                            "type": "object",
+                            "properties": {
+                              "membershipKey": { "type": "integer" },
+                              "membershipId": { "type": "string", "format": "uuid" },
+                              "status": { "type": "integer" }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
-          ],
-          "responses": { "200": { "description": "OK" } }
-        }
-      },
-      "/api/widgets/{widgetId}/embed": {
-        "get": {
-          "tags": ["Widgets"],
-          "summary": "Get Embed Code",
-          "security": [{ "bearerAuth": [] }],
-          "parameters": [
-            { "name": "x-workspace-id", "in": "header", "required": true, "type": "string" },
-            { "name": "widgetId", "in": "path", "required": true, "type": "string" }
-          ],
-          "responses": { "200": { "description": "OK" } }
-        }
-      },
-      "/public/widgets/{widgetId}/config": {
-        "get": {
-          "tags": ["Public Widget"],
-          "summary": "Get Config",
-          "parameters": [
-            { "name": "widgetId", "in": "path", "required": true, "type": "string" },
-            { "name": "host", "in": "query", "type": "string" }
-          ],
-          "responses": { "200": { "description": "OK" } }
-        }
-      },
-      "/public/widgets/{widgetId}/messages": {
-        "post": {
-          "tags": ["Public Widget"],
-          "summary": "Post Message",
-          "parameters": [
-            { "name": "widgetId", "in": "path", "required": true, "type": "string" },
-            {
-              "name": "body",
-              "in": "body",
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "visitorId": { "type": "string" },
-                  "content": { "type": "string" },
-                  "url": { "type": "string" }
-                }
-              }
-            }
-          ],
-          "responses": { "201": { "description": "Created" } }
+          },
+          "401": { "description": "Unauthorized" }
         }
       }
+    },
+    "/api/workspaces/invites/accept": {
+      "post": {
+        "tags": ["Workspace Invites"],
+        "summary": "Accept Invite",
+        "description": "Accept an invitation to join a workspace using the invite token.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "token": { "type": "string", "description": "Invite token from email" }
+              },
+              "required": ["token"]
+            }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Joined workspace successfully" },
+          "400": { "description": "Invalid or expired token" }
+        }
+      }
+    },
+    "/api/workspaces/{workspaceId}/invites": {
+      "post": {
+        "tags": ["Workspace Invites"],
+        "summary": "Invite Member",
+        "description": "Invite a new member to the workspace. Cannot invite with 'Owner' role.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "workspaceId", "in": "path", "required": true, "type": "string" },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "email": { "type": "string", "format": "email" },
+                "role": { "type": "string", "description": "Role to assign (cannot be 'Owner')" }
+              },
+              "required": ["email", "role"]
+            }
+          }
+        ],
+        "responses": {
+          "201": { "description": "Invite sent" },
+          "403": { "description": "Cannot invite with Owner role" },
+          "409": { "description": "User already member or invite pending" }
+        }
+      },
+      "get": {
+        "tags": ["Workspace Invites"],
+        "summary": "List Pending Invites",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "workspaceId", "in": "path", "required": true, "type": "string" }
+        ],
+        "responses": {
+          "200": { "description": "List of pending invites" }
+        }
+      }
+    },
+    "/api/workspaces/{workspaceId}/invites/{inviteKey}": {
+      "delete": {
+        "tags": ["Workspace Invites"],
+        "summary": "Revoke Invite",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "workspaceId", "in": "path", "required": true, "type": "string" },
+          { "name": "inviteKey", "in": "path", "required": true, "type": "string" }
+        ],
+        "responses": {
+          "200": { "description": "Invite revoked" },
+          "404": { "description": "Invite not found" }
+        }
+      }
+    },
+    "/api/workspaces/{workspaceId}/members": {
+      "get": {
+        "tags": ["Workspace Members"],
+        "summary": "List Members",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "workspaceId", "in": "path", "required": true, "type": "string" }
+        ],
+        "responses": {
+          "200": { "description": "List of workspace members" }
+        }
+      }
+    },
+    "/api/workspaces/{workspaceId}/members/{membershipKey}": {
+      "delete": {
+        "tags": ["Workspace Members"],
+        "summary": "Remove Member",
+        "description": "Remove a member from workspace. Cannot remove an Owner.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "workspaceId", "in": "path", "required": true, "type": "string" },
+          { "name": "membershipKey", "in": "path", "required": true, "type": "string" }
+        ],
+        "responses": {
+          "200": { "description": "Member removed" },
+          "403": { "description": "Cannot remove an Owner" }
+        }
+      }
+    },
+    "/api/workspaces/{workspaceId}/members/{membershipKey}/role": {
+      "patch": {
+        "tags": ["Workspace Members"],
+        "summary": "Assign Role",
+        "description": "Assign a role to a member. Cannot assign 'Owner' role.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "workspaceId", "in": "path", "required": true, "type": "string" },
+          { "name": "membershipKey", "in": "path", "required": true, "type": "string" },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "role": { "type": "string", "description": "Role name (cannot be 'Owner')" }
+              },
+              "required": ["role"]
+            }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Role assigned" },
+          "403": { "description": "Cannot assign Owner role" }
+        }
+      }
+    },
+    "/widget.js": {
+      "get": {
+        "tags": ["Public Widget"],
+        "summary": "Get Widget Script",
+        "description": "Returns the vanilla JS chat widget script.",
+        "produces": ["application/javascript"],
+        "responses": {
+          "200": { "description": "JavaScript Code" }
+        }
+      }
+    },
+    "/api/widgets": {
+      "post": {
+        "tags": ["Widgets"],
+        "summary": "Create Widget",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "x-workspace-id",
+            "in": "header",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "allowedDomains": { "type": "array", "items": { "type": "string" } },
+                "theme": {
+                  "type": "object",
+                  "properties": {
+                    "title": { "type": "string" },
+                    "subtitle": { "type": "string" },
+                    "color": { "type": "string" },
+                    "position": { "type": "string", "enum": ["br", "bl"] },
+                    "autoOpen": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/api/widgets/{widgetId}": {
+      "get": {
+        "tags": ["Widgets"],
+        "summary": "Get Widget",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "x-workspace-id", "in": "header", "required": true, "type": "string" },
+          { "name": "widgetId", "in": "path", "required": true, "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      },
+      "patch": {
+        "tags": ["Widgets"],
+        "summary": "Update Widget",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "x-workspace-id", "in": "header", "required": true, "type": "string" },
+          { "name": "widgetId", "in": "path", "required": true, "type": "string" },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "status": { "type": "integer" },
+                "allowedDomains": { "type": "array", "items": { "type": "string" } },
+                "theme": { "type": "object" }
+              }
+            }
+          }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/widgets/{widgetId}/embed": {
+      "get": {
+        "tags": ["Widgets"],
+        "summary": "Get Embed Code",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "x-workspace-id", "in": "header", "required": true, "type": "string" },
+          { "name": "widgetId", "in": "path", "required": true, "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/public/widgets/{widgetId}/config": {
+      "get": {
+        "tags": ["Public Widget"],
+        "summary": "Get Config",
+        "parameters": [
+          { "name": "widgetId", "in": "path", "required": true, "type": "string" },
+          { "name": "host", "in": "query", "type": "string" }
+        ],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/public/widgets/{widgetId}/messages": {
+      "post": {
+        "tags": ["Public Widget"],
+        "summary": "Post Message",
+        "parameters": [
+          { "name": "widgetId", "in": "path", "required": true, "type": "string" },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "visitorId": { "type": "string" },
+                "content": { "type": "string" },
+                "url": { "type": "string" }
+              }
+            }
+          }
+        ],
+        "responses": { "201": { "description": "Created" } }
+      }
+    }
   },
   "definitions": {
     "AppError": {
