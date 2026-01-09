@@ -52,9 +52,15 @@ function init(namespace) {
             try {
                 // Auto-join rooms for all sites the agent has access to
                 const widgets = await widgetsService.getWidgetsByUser(userKey);
+
+                if (widgets.length === 0) {
+                    console.warn(`[Embed] Warning: No active widgets found for Agent ${userKey}. Real-time updates may fail.`);
+                }
+
                 let count = 0;
                 widgets.forEach(w => {
-                    socket.join(`agent:site:${w.SiteKey}`);
+                    const skid = w.SiteKey.toLowerCase();
+                    socket.join(`agent:site:${skid}`);
                     count++;
                 });
                 console.log(`[Embed] Agent ${userKey} joined ${count} site rooms`);
@@ -74,6 +80,63 @@ function init(namespace) {
                     const { siteKey, visitorId } = payload || {};
                     if (siteKey && visitorId) {
                         socket.leave(`embed:${siteKey}:${visitorId}`);
+                    }
+                });
+
+                // Agent sending message (Unified Inbox)
+                socket.on('embed:agent-message', async (payload, callback) => {
+                    try {
+                        const { text, conversationId, siteKey, visitorId, clientMsgId } = payload;
+                        if (!text || !conversationId) throw new Error('Invalid payload');
+
+                        const conv = await embedService.getConversationById(conversationId);
+                        if (!conv) throw new Error('Conversation not found');
+
+                        // Create message (Type 2 = Agent)
+                        const message = await embedService.createMessage(
+                            conv.ConversationKey,
+                            text,
+                            2, // Sender: Agent
+                            userKey, // SenderId: Agent UserKey
+                            conversationId,
+                            clientMsgId
+                        );
+
+                        // Update activity
+                        embedService.updateConversationActivityWithSeq(
+                            conv.ConversationKey,
+                            message.seq,
+                            message.content,
+                            message.messageId
+                        ).catch(console.error);
+
+                        const messageData = {
+                            id: message.messageId,
+                            seq: message.seq,
+                            conversationId: conversationId,
+                            visitorId: visitorId,
+                            text: message.content,
+                            sender: 'agent',
+                            senderType: 2,
+                            senderId: userKey,
+                            createdAt: message.createdAt,
+                            clientMsgId: message.clientMsgId,
+                            siteKey: siteKey
+                        };
+
+                        // Broadcast to conversation room (Visitor sees this)
+                        const roomName = `embed:${siteKey}:${visitorId}`;
+                        namespace.to(roomName).emit('embed:message', messageData);
+
+                        // Broadcast to other Agents
+                        const normalizedSiteKey = siteKey.toLowerCase();
+                        const agentRoom = `agent:site:${normalizedSiteKey}`;
+                        namespace.to(agentRoom).emit('embed:message', messageData);
+
+                        if (typeof callback === 'function') callback({ success: true, data: messageData });
+                    } catch (err) {
+                        console.error('[Embed] Agent message error:', err);
+                        if (typeof callback === 'function') callback({ success: false, error: err.message });
                     }
                 });
 
@@ -213,7 +276,16 @@ function init(namespace) {
                 namespace.to(roomName).emit('embed:message', messageData);
 
                 // Broadcast to Unified Agents watching this site
-                namespace.to(`agent:site:${siteKey}`).emit('embed:message', messageData);
+                const normalizedSiteKey = siteKey.toLowerCase();
+                const agentRoom = `agent:site:${normalizedSiteKey}`;
+                const roomSize = namespace.adapter.rooms.get(agentRoom)?.size || 0;
+                console.log(`[Embed] Broadcasting to agent room: ${agentRoom} (Sockets: ${roomSize})`);
+
+                if (roomSize > 0) {
+                    namespace.to(agentRoom).emit('embed:message', messageData);
+                } else {
+                    console.log(`[Embed] No agents in room ${agentRoom}, skipping broadcast`);
+                }
 
                 if (typeof callback === 'function') {
                     callback({ success: true, data: messageData });

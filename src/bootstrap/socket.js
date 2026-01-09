@@ -72,6 +72,7 @@ function initSocket(httpServer) {
                         userKey: userKey,
                         isAgent: true
                     };
+                    console.log(`[Socket] Authenticated Agent UserKey: ${userKey}`);
                     // Set minimal embedData relative to agent status if needed
                     socket.embedData = { isAgent: true }; // Flag for handlers
                     return next();
