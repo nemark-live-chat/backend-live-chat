@@ -45,20 +45,42 @@ function initSocket(httpServer) {
         }
 
         try {
-            const decoded = jwt.verify(token, env.embed.jwtSecret);
+            // Try 1: Embed Token (Visitor or Widget-Scopted Agent)
+            try {
+                const decoded = jwt.verify(token, env.embed.jwtSecret);
 
-            if (decoded.typ !== 'embed') {
-                return next(new Error('Invalid token type'));
+                if (decoded.typ === 'embed') {
+                    socket.embedData = {
+                        siteKey: decoded.siteKey,
+                        visitorId: decoded.visitorId,
+                        widgetKey: decoded.widgetKey
+                    };
+                    return next();
+                }
+            } catch (ignore) {
+                // Token not signed with embed secret, try app secret
             }
 
-            // Attach decoded data to socket
-            socket.embedData = {
-                siteKey: decoded.siteKey,
-                visitorId: decoded.visitorId,
-                widgetKey: decoded.widgetKey
-            };
+            // Try 2: App Token (Unified Agent)
+            try {
+                const decoded = jwt.verify(token, env.app.jwtSecret);
+                // Assumption: Access Token has 'sub' or 'id' as UserKey
+                const userKey = decoded.sub || decoded.id;
 
-            next();
+                if (userKey) {
+                    socket.agentData = {
+                        userKey: userKey,
+                        isAgent: true
+                    };
+                    // Set minimal embedData relative to agent status if needed
+                    socket.embedData = { isAgent: true }; // Flag for handlers
+                    return next();
+                }
+            } catch (err) {
+                // Invalid app token
+            }
+
+            return next(new Error('Invalid token'));
         } catch (err) {
             console.error('[Socket] Auth error:', err.message);
             return next(new Error('Invalid token'));

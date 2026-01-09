@@ -8,6 +8,7 @@ IF OBJECT_ID('iam.Widgets', 'U') IS NULL
 CREATE TABLE iam.Widgets (
     WidgetKey BIGINT IDENTITY(1,1) NOT NULL,
     WidgetId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWSEQUENTIALID(),
+    SiteKey NVARCHAR(24) NOT NULL, -- Unique key for embed script
     
     WorkspaceKey BIGINT NOT NULL,
     Name NVARCHAR(120) NOT NULL,
@@ -22,9 +23,24 @@ CREATE TABLE iam.Widgets (
     
     CONSTRAINT PK_Widgets PRIMARY KEY CLUSTERED (WidgetKey),
     CONSTRAINT UQ_Widgets_WidgetId UNIQUE (WidgetId),
+    CONSTRAINT UQ_Widgets_SiteKey UNIQUE (SiteKey),
     CONSTRAINT FK_Widgets_Workspace 
         FOREIGN KEY (WorkspaceKey) REFERENCES iam.Workspaces(WorkspaceKey)
 );
+
+-- Add SiteKey column if table exists but column doesn't
+IF OBJECT_ID('iam.Widgets', 'U') IS NOT NULL
+AND COL_LENGTH('iam.Widgets', 'SiteKey') IS NULL
+BEGIN
+    ALTER TABLE iam.Widgets ADD SiteKey NVARCHAR(24) NULL;
+    -- Update existing rows with random sitekeys
+    UPDATE iam.Widgets SET SiteKey = LOWER(REPLACE(CONVERT(NVARCHAR(36), NEWID()), '-', '')) WHERE SiteKey IS NULL;
+    -- Make it NOT NULL after populating
+    ALTER TABLE iam.Widgets ALTER COLUMN SiteKey NVARCHAR(24) NOT NULL;
+    -- Add unique constraint
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'UQ_Widgets_SiteKey' AND object_id = OBJECT_ID('iam.Widgets'))
+        ALTER TABLE iam.Widgets ADD CONSTRAINT UQ_Widgets_SiteKey UNIQUE (SiteKey);
+END
 
 CREATE INDEX IX_Widgets_WorkspaceKey ON iam.Widgets(WorkspaceKey);
 GO

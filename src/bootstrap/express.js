@@ -21,8 +21,8 @@ module.exports = () => {
   // CORS - allow all origins for embed functionality
   app.use(cors({
     origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-workspace-id'],
     credentials: false // Cannot use credentials with origin: '*'
   }));
 

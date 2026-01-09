@@ -4,7 +4,7 @@ const getRequest = (txn) => txn ? txn.request() : getPool().request();
 
 const findByEmail = async (email) => {
   const result = await getPool().request()
-    .input('email', sql.NVarChar, email)
+    .input('email', sql.NVarChar, email.toLowerCase().trim())
     .query('SELECT * FROM iam.Users WHERE EmailNormalized = @email');
   return result.recordset[0];
 };
@@ -18,7 +18,7 @@ const findById = async (userKey) => {
 
 const createUser = async (userData, txn) => {
   const req = getRequest(txn);
-  
+
   const result = await req
     .input('email', sql.NVarChar, userData.email)
     .input('emailNorm', sql.NVarChar, userData.email.toLowerCase()) // TODO: Better helper
@@ -28,7 +28,7 @@ const createUser = async (userData, txn) => {
       OUTPUT inserted.*
       VALUES (@email, @emailNorm, @displayName)
     `);
-    
+
   return result.recordset[0];
 };
 
@@ -36,7 +36,7 @@ const createUser = async (userData, txn) => {
 
 const getUserContext = async (userKey) => {
   const pool = getPool();
-  
+
   // 1. Get Workspaces & Roles
   const membershipsResult = await pool.request()
     .input('userKey', sql.BigInt, userKey)

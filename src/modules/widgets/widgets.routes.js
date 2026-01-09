@@ -11,6 +11,11 @@ const resolveWorkspace = require('../../middlewares/resolveWorkspace');
 router.use(authenticate);
 router.use(resolveWorkspace);
 
+// List all widgets for workspace (any workspace member can list)
+router.get('/',
+  controller.list
+);
+
 router.post('/',
   authorize('widget.manage'),
   validate(schema.createWidget),

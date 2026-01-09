@@ -424,14 +424,27 @@ const getAdmin = (req, res) => {
  * GET /api/embed/conversations?siteKey=xxx
  * List conversations for a site (agent use)
  */
+/**
+ * GET /api/embed/conversations
+ * List conversations.
+ * - If Authenticated: Returns conversations across ALL workspaces for the user (Unified Inbox)
+ * - If siteKey provided (Legacy): Filter/List by siteKey (requires auth or relaxed middleware)
+ */
 const getConversations = asyncHandler(async (req, res) => {
   const { siteKey, limit = 50 } = req.query;
+  const user = req.user; // From authenticate middleware
 
-  if (!siteKey) {
-    throw new AppError('siteKey is required', 400);
+  let conversations = [];
+
+  if (user) {
+    // Unified Inbox: Get all conversations for user's workspaces
+    conversations = await embedService.listConversationsForUser(user.UserKey, parseInt(limit, 10));
+  } else if (siteKey) {
+    // Legacy/Public fallback (only if auth middleware is optional)
+    conversations = await embedService.listConversationsBySiteKey(siteKey, parseInt(limit, 10));
+  } else {
+    throw new AppError('Authentication required', 401);
   }
-
-  const conversations = await embedService.listConversationsBySiteKey(siteKey, parseInt(limit, 10));
 
   res.status(200).json({
     status: 'success',
@@ -600,6 +613,9 @@ const sendAgentMessage = asyncHandler(async (req, res) => {
     const { emitToEmbedRoom } = require('../../bootstrap/socket');
     const roomName = `embed:${siteKey}:${visitorId}`;
     emitToEmbedRoom(roomName, 'embed:message', messageData);
+
+    // Broadcast to unified agents
+    emitToEmbedRoom(`agent:site:${siteKey}`, 'embed:message', messageData);
   } catch (err) {
     console.warn('Failed to emit socket message:', err.message);
   }

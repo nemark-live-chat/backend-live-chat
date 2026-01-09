@@ -3,22 +3,24 @@ const asyncHandler = require('../../utils/asyncHandler');
 const AppError = require('../../utils/AppError');
 const env = require('../../config/env');
 
-const PUBLIC_WIDGET_HOST = process.env.PUBLIC_WIDGET_HOST || 'http://localhost:3001';
-const PUBLIC_API_HOST = process.env.PUBLIC_API_HOST || PUBLIC_WIDGET_HOST;
-const WIDGET_SCRIPT_PATH = process.env.WIDGET_SCRIPT_PATH || '/widget.js';
+// Widget script is served at /api/widget.js
+// Public endpoints are at /api/public/widgets/...
+const PUBLIC_HOST = process.env.PUBLIC_HOST || 'http://localhost:3001';
+const WIDGET_SCRIPT_PATH = '/api/widget.js';
+const PUBLIC_API_BASE = `${PUBLIC_HOST}/api`; // Include /api prefix for public endpoints
 
 const generateEmbedCode = (widgetId) => {
-  const scriptUrl = `${PUBLIC_WIDGET_HOST}${WIDGET_SCRIPT_PATH}`;
+  const scriptUrl = `${PUBLIC_HOST}${WIDGET_SCRIPT_PATH}`;
   return {
     scriptUrl,
-    embedScript: `<script async src="${scriptUrl}" data-widget-id="${widgetId}" data-api-base="${PUBLIC_API_HOST}"></script>`
+    embedScript: `<script async src="${scriptUrl}" data-widget-id="${widgetId}" data-api-base="${PUBLIC_API_BASE}"></script>`
   };
 };
 
 const create = asyncHandler(async (req, res) => {
   const widget = await service.create(req.workspaceKey, req.body);
   const embed = generateEmbedCode(widget.WidgetId);
-  
+
   res.status(201).json({
     status: 'success',
     data: {
@@ -33,7 +35,7 @@ const create = asyncHandler(async (req, res) => {
 const getOne = asyncHandler(async (req, res) => {
   const { widgetId } = req.params;
   const widget = await service.getById(req.workspaceKey, widgetId);
-  
+
   if (!widget) {
     throw new AppError('Widget not found', 404);
   }
@@ -51,7 +53,7 @@ const getOne = asyncHandler(async (req, res) => {
 const update = asyncHandler(async (req, res) => {
   const { widgetId } = req.params;
   const widget = await service.update(req.workspaceKey, widgetId, req.body);
-  
+
   if (!widget) {
     throw new AppError('Widget not found', 404);
   }
@@ -78,9 +80,37 @@ const getEmbed = asyncHandler(async (req, res) => {
   res.status(200).json({ status: 'success', data: embed });
 });
 
+/**
+ * List all widgets for workspace
+ */
+const list = asyncHandler(async (req, res) => {
+  const widgets = await service.list(req.workspaceKey);
+
+  // Parse JSON fields for each widget
+  const parsedWidgets = widgets.map(widget => ({
+    widgetId: widget.WidgetId,
+    widgetKey: widget.WidgetKey,
+    siteKey: widget.SiteKey,
+    name: widget.Name,
+    allowedDomains: JSON.parse(widget.AllowedDomains || '[]'),
+    theme: JSON.parse(widget.Theme || '{}'),
+    status: widget.Status,
+    createdAt: widget.CreatedAt,
+    updatedAt: widget.UpdatedAt
+  }));
+
+  res.status(200).json({
+    status: 'success',
+    data: {
+      widgets: parsedWidgets
+    }
+  });
+});
+
 module.exports = {
   create,
   getOne,
   update,
-  getEmbed
+  getEmbed,
+  list
 };
