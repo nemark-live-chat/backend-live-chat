@@ -192,12 +192,12 @@ const listConversationsForUser = async (userKey, limit = 50) => {
 /**
  * Get messages (Legacy Support)
  */
-const getMessages = async (conversationId, limit = 50) => {
+const getMessages = async (conversationId, limit = 50, before = null) => {
   const conv = await conversationRepo.getConversationById(conversationId);
   if (!conv) throw new AppError('Conversation not found', 404);
 
   // Use new Repo but return flat array
-  return messageRepo.listMessagesBySeq(conv.ConversationKey, limit);
+  return messageRepo.listMessagesBySeq(conv.ConversationKey, limit, before);
 };
 
 /**
