@@ -37,6 +37,9 @@ router.get('/conversations', authenticate, controller.getConversations);
 // Messages for a conversation with keyset cursor pagination (RECOMMENDED)
 router.get('/conversations/:conversationId/messages', controller.getMessagesBySeq);
 
+// Mark conversation as read
+router.post('/conversations/:conversationId/read', authenticate, controller.markRead);
+
 // Messages for a conversation (LEGACY - uses timestamp pagination)
 router.get('/messages/:conversationId', controller.getMessages);
 

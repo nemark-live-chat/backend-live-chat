@@ -54,6 +54,27 @@ const listWorkspaces = asyncHandler(async (req, res) => {
     });
 });
 
+/**
+ * Update workspace settings
+ * PATCH /api/workspaces/:workspaceId
+ * 
+ * Requires: workspace.update permission
+ */
+const updateWorkspace = asyncHandler(async (req, res) => {
+    const { name } = req.body;
+
+    const result = await workspacesService.updateWorkspace({
+        workspaceKey: req.workspace.workspaceKey,
+        name,
+    });
+
+    res.status(200).json({
+        status: 'success',
+        message: 'Workspace updated successfully',
+        data: { workspace: result },
+    });
+});
+
 // ============================================
 // INVITE ENDPOINTS
 // ============================================
@@ -208,6 +229,7 @@ const assignRole = asyncHandler(async (req, res) => {
 module.exports = {
     // Workspace
     createWorkspace,
+    updateWorkspace,
     listWorkspaces,
     // Invite
     inviteMember,

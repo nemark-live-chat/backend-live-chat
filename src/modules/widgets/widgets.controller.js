@@ -3,23 +3,22 @@ const asyncHandler = require('../../utils/asyncHandler');
 const AppError = require('../../utils/AppError');
 const env = require('../../config/env');
 
-// Widget script is served at /api/widget.js
+// Widget script is served at /api/embed/widget.js
 // Public endpoints are at /api/public/widgets/...
 const PUBLIC_HOST = process.env.PUBLIC_HOST || 'http://localhost:3001';
-const WIDGET_SCRIPT_PATH = '/api/widget.js';
-const PUBLIC_API_BASE = `${PUBLIC_HOST}/api`; // Include /api prefix for public endpoints
+const WIDGET_SCRIPT_PATH = '/api/embed/widget.js';
 
-const generateEmbedCode = (widgetId) => {
+const generateEmbedCode = (siteKey) => {
   const scriptUrl = `${PUBLIC_HOST}${WIDGET_SCRIPT_PATH}`;
   return {
     scriptUrl,
-    embedScript: `<script async src="${scriptUrl}" data-widget-id="${widgetId}" data-api-base="${PUBLIC_API_BASE}"></script>`
+    embedScript: `<script async src="${scriptUrl}" data-site-key="${siteKey}" data-api-base="${PUBLIC_HOST}"></script>`
   };
 };
 
 const create = asyncHandler(async (req, res) => {
   const widget = await service.create(req.workspaceKey, req.body);
-  const embed = generateEmbedCode(widget.WidgetId);
+  const embed = generateEmbedCode(widget.SiteKey);
 
   res.status(201).json({
     status: 'success',
@@ -76,7 +75,7 @@ const getEmbed = asyncHandler(async (req, res) => {
     throw new AppError('Widget not found', 404);
   }
 
-  const embed = generateEmbedCode(widgetId);
+  const embed = generateEmbedCode(widget.SiteKey);
   res.status(200).json({ status: 'success', data: embed });
 });
 

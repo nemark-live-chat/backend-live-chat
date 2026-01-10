@@ -89,6 +89,12 @@ function init(namespace) {
                         const { text, conversationId, siteKey, visitorId, clientMsgId } = payload;
                         if (!text || !conversationId) throw new Error('Invalid payload');
 
+                        // Validate GUID format
+                        const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+                        if (!guidRegex.test(conversationId)) {
+                            throw new Error('Invalid conversationId format');
+                        }
+
                         const conv = await embedService.getConversationById(conversationId);
                         if (!conv) throw new Error('Conversation not found');
 
@@ -164,13 +170,14 @@ function init(namespace) {
         // Handle join event (explicit join with optional visitor name)
         socket.on('embed:join', async (payload, callback) => {
             try {
-                const { visitorName } = payload || {};
+                const { visitorName, sourceUrl } = payload || {};
 
                 // Get or create conversation
                 const result = await embedService.getOrCreateConversation(
                     widgetKey,
                     visitorId,
-                    visitorName
+                    visitorName,
+                    sourceUrl
                 );
 
                 // Store conversationId in socket for later use
@@ -320,6 +327,16 @@ function init(namespace) {
                     }
                     socket.conversationKey = conv.ConversationKey;
                     socket.conversationId = conv.ConversationId;
+                }
+
+                // Validate GUID format to prevent SQL crash
+                const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+                if (!guidRegex.test(socket.conversationId)) {
+                    console.warn(`[Embed] Invalid conversationId format in history request: ${socket.conversationId}`);
+                    if (typeof callback === 'function') {
+                        callback({ success: false, error: 'Invalid conversation ID' });
+                    }
+                    return;
                 }
 
                 const messages = await embedService.getMessages(

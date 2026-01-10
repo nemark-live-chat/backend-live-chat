@@ -488,7 +488,8 @@
                 siteKey: urlParams.get('siteKey'),
                 visitorId: urlParams.get('visitorId'),
                 theme: urlParams.get('theme') || 'light',
-                title: urlParams.get('title') || 'Support'
+                title: urlParams.get('title') || 'Support',
+                sourceUrl: urlParams.get('sourceUrl') || ''
             };
 
             // Validate required params
@@ -527,6 +528,11 @@
             let lastTypingEmit = 0;
             const pendingMessages = new Map();
             const parentOrigin = '*'; // Will be validated by parent
+
+            // History State
+            let minSeq = null;
+            let isLoadingHistory = false;
+            let hasMoreHistory = true;
 
             // ===========================
             // Initialization
@@ -599,7 +605,7 @@
                     updateConnectionStatus('connected');
 
                     // Join conversation
-                    socket.emit('embed:join', {}, (response) => {
+                    socket.emit('embed:join', { sourceUrl: config.sourceUrl }, (response) => {
                         if (response.success) {
                             conversationId = response.data.conversationId;
                             console.log('[Chat] Joined conversation:', conversationId);
@@ -608,6 +614,9 @@
                             socket.emit('embed:history', { limit: 30 }, (historyResponse) => {
                                 if (historyResponse.success) {
                                     renderHistory(historyResponse.data.messages);
+                                    if (historyResponse.data.messages.length < 30) {
+                                        hasMoreHistory = false;
+                                    }
                                 }
                                 hideLoading();
                             });
@@ -735,8 +744,90 @@
                 existingMessages.forEach(m => m.remove());
 
                 // Render messages
-                messages.forEach(msg => renderMessage(msg, false));
+                messages.forEach(msg => {
+                    renderMessage(msg, false);
+                    if (minSeq === null || msg.seq < minSeq) {
+                        minSeq = msg.seq;
+                    }
+                });
                 scrollToBottom();
+            }
+
+            function loadMoreHistory() {
+                if (isLoadingHistory || !hasMoreHistory || !minSeq) return;
+
+                isLoadingHistory = true;
+                const currentScrollHeight = elements.messagesContainer.scrollHeight;
+
+                // Show loading indicator logic if needed (e.g., small spinner at top)
+
+                socket.emit('embed:history', { limit: 30, before: minSeq }, (response) => {
+                    if (response.success) {
+                        const messages = response.data.messages;
+                        if (messages.length > 0) {
+                            prependHistory(messages);
+                            if (messages.length < 30) {
+                                hasMoreHistory = false;
+                            }
+                        } else {
+                            hasMoreHistory = false;
+                        }
+                    }
+                    isLoadingHistory = false;
+                });
+            }
+
+            function prependHistory(messages) {
+                if (messages.length === 0) return;
+
+                // Capture scroll position
+                const container = elements.messagesContainer;
+                const oldScrollHeight = container.scrollHeight;
+                const oldScrollTop = container.scrollTop;
+
+                // Create fragment
+                const fragment = document.createDocumentFragment();
+
+                messages.forEach(msg => {
+                    if (document.getElementById(`msg-${msg.id}`)) return;
+
+                    const messageEl = createMessageElement(msg);
+                    fragment.appendChild(messageEl);
+
+                    if (minSeq === null || msg.seq < minSeq) {
+                        minSeq = msg.seq;
+                    }
+                });
+
+                // Insert after welcome message (which should be hidden/removed) or at top
+                // Assuming welcome message is first child if present.
+                // We should insert before the first message element.
+                const firstMessage = container.querySelector('.message');
+                if (firstMessage) {
+                    container.insertBefore(fragment, firstMessage);
+                } else {
+                    container.appendChild(fragment);
+                }
+
+                // Restore scroll position
+                // New scroll position = (new scroll height - old scroll height) + "loading offset" if any
+                // Usually just extracting the diff works.
+                const newScrollHeight = container.scrollHeight;
+                container.scrollTop = newScrollHeight - oldScrollHeight;
+            }
+
+            function createMessageElement(message) {
+                const messageEl = document.createElement('div');
+                messageEl.className = `message ${message.sender}`;
+                messageEl.id = `msg-${message.id}`;
+
+                const time = formatTime(new Date(message.createdAt));
+
+                messageEl.innerHTML = `
+                <div class="message-bubble">${escapeHtml(message.text)}</div>
+                <div class="message-time">${time}</div>
+            `;
+                return messageEl;
             }
 
             function renderMessage(message, scroll = true) {
@@ -748,16 +839,7 @@
                     return;
                 }
 
-                const messageEl = document.createElement('div');
-                messageEl.className = `message ${message.sender}`;
-                messageEl.id = `msg-${message.id}`;
-
-                const time = formatTime(new Date(message.createdAt));
-
-                messageEl.innerHTML = `
-                <div class="message-bubble">${escapeHtml(message.text)}</div>
-                <div class="message-time">${time}</div>
-            `;
+                const messageEl = createMessageElement(message);
 
                 // Insert before typing indicator if it exists
                 elements.messagesContainer.appendChild(messageEl);
@@ -801,7 +883,7 @@
                 elements.sendButton.disabled = true;
 
                 // Send via socket
-                socket.emit('embed:message', { text, clientMsgId }, (response) => {
+                socket.emit('embed:message', { text, clientMsgId, sourceUrl: config.sourceUrl }, (response) => {
                     if (!response.success) {
                         console.error('[Chat] Send failed:', response.error);
                         // Could mark message as failed
@@ -902,6 +984,11 @@
             elements.messageInput.addEventListener('input', handleInput);
             elements.messageInput.addEventListener('keydown', handleKeyDown);
             elements.sendButton.addEventListener('click', sendMessage);
+            elements.messagesContainer.addEventListener('scroll', () => {
+                if (elements.messagesContainer.scrollTop === 0) {
+                    loadMoreHistory();
+                }
+            });
             elements.closeButton.addEventListener('click', () => {
                 notifyParent('WIDGET_CLOSE', {});
             });

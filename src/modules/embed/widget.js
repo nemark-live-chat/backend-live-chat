@@ -246,6 +246,7 @@
       '?siteKey=' + encodeURIComponent(siteKey) +
       '&visitorId=' + encodeURIComponent(visitorId) +
       '&title=' + encodeURIComponent(config.title) +
+      '&sourceUrl=' + encodeURIComponent(window.location.href) +
       '&t=' + Date.now();
 
     iframe.src = iframeSrc;
@@ -385,11 +386,37 @@
     }
   }
 
+  // Start with domain validation
+  function start() {
+    var checkUrl = config.apiBase + '/api/public/widgets/' + config.siteKey + '/config?host=' + encodeURIComponent(window.location.origin);
+
+    // fetch is required for validation
+    if (window.fetch) {
+      fetch(checkUrl)
+        .then(function (res) {
+          if (res.status === 403) throw new Error('Domain not allowed');
+          if (!res.ok) throw new Error('Widget disabled or not found');
+          return res.json();
+        })
+        .then(function (data) {
+          // Success: Initialize widget
+          init();
+        })
+        .catch(function (err) {
+          console.warn('Nemark Chat: Security check failed - ' + err.message);
+        });
+    } else {
+      // Legacy browsers without fetch: Skip validation or block?
+      // Blocking is safer for enforcement.
+      console.warn('Nemark Chat: Browser not supported (fetch API required)');
+    }
+  }
+
   // Wait for DOM ready
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', start);
   } else {
-    init();
+    start();
   }
 
   // Expose global API

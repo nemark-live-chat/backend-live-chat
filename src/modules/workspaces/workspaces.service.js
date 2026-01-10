@@ -114,6 +114,69 @@ const createWorkspace = async ({ userKey, name }) => {
 };
 
 /**
+ * Update workspace settings
+ * @param {object} params
+ * @param {number} params.workspaceKey - Workspace to update
+ * @param {string} [params.name] - New workspace name
+ */
+const updateWorkspace = async ({ workspaceKey, name, settings }) => {
+    const pool = getPool();
+
+    // Build update query dynamically
+    const updates = [];
+    const request = pool.request();
+    request.input('workspaceKey', sql.BigInt, workspaceKey);
+
+    if (name) {
+        updates.push('Name = @name');
+        request.input('name', sql.NVarChar(255), name);
+    }
+
+    if (settings) {
+        updates.push('Settings = @settings');
+        const settingsValue = typeof settings === 'object' ? JSON.stringify(settings) : settings;
+        request.input('settings', sql.NVarChar(sql.MAX), settingsValue);
+    }
+
+    if (updates.length === 0) {
+        throw new AppError('No fields to update', 400);
+    }
+
+    const updateQuery = `
+        UPDATE iam.Workspaces
+        SET ${updates.join(', ')}, UpdatedAt = GETUTCDATE()
+        WHERE WorkspaceKey = @workspaceKey AND Status = 1
+    `;
+
+    const result = await request.query(updateQuery);
+
+    if (result.rowsAffected[0] === 0) {
+        throw new AppError('Workspace not found', 404);
+    }
+
+    // Fetch updated workspace
+    const updated = await pool.request()
+        .input('workspaceKey', sql.BigInt, workspaceKey)
+        .query(`
+            SELECT WorkspaceKey, WorkspaceId, Name, Status, Settings, CreatedAt, UpdatedAt
+            FROM iam.Workspaces
+            WHERE WorkspaceKey = @workspaceKey
+        `);
+
+    const workspace = updated.recordset[0];
+
+    return {
+        workspaceKey: workspace.WorkspaceKey,
+        workspaceId: workspace.WorkspaceId,
+        name: workspace.Name,
+        status: workspace.Status,
+        settings: workspace.Settings ? JSON.parse(workspace.Settings) : null,
+        createdAt: workspace.CreatedAt,
+        updatedAt: workspace.UpdatedAt,
+    };
+};
+
+/**
  * Get workspaces for a user
  */
 const getWorkspacesForUser = async (userKey) => {
@@ -126,10 +189,18 @@ const getWorkspacesForUser = async (userKey) => {
         w.WorkspaceId,
         w.Name,
         w.Status,
+        w.Settings,
         w.CreatedAt,
         m.MembershipKey,
         m.MembershipId,
-        m.Status AS MembershipStatus
+        m.Status AS MembershipStatus,
+        (
+          SELECT TOP 1 r.Name 
+          FROM iam.MembershipRoles mr 
+          JOIN iam.Roles r ON r.RoleKey = mr.RoleKey 
+          WHERE mr.MembershipKey = m.MembershipKey
+          ORDER BY CASE WHEN r.Name = 'Owner' THEN 0 ELSE 1 END
+        ) AS PrimaryRole
       FROM iam.Memberships m
       JOIN iam.Workspaces w ON w.WorkspaceKey = m.WorkspaceKey
       WHERE m.UserKey = @userKey
@@ -148,6 +219,7 @@ const getWorkspacesForUser = async (userKey) => {
             membershipKey: row.MembershipKey,
             membershipId: row.MembershipId,
             status: row.MembershipStatus,
+            role: row.PrimaryRole || 'User',
         },
     }));
 };
@@ -524,6 +596,7 @@ const assignRole = async ({ workspaceKey, targetMembershipKey, role, actorMember
 module.exports = {
     // Workspace
     createWorkspace,
+    updateWorkspace,
     getWorkspacesForUser,
     // Invite
     inviteMember,

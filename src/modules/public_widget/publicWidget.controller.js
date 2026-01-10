@@ -2,6 +2,12 @@ const service = require('./publicWidget.service');
 const asyncHandler = require('../../utils/asyncHandler');
 const AppError = require('../../utils/AppError');
 
+// Helper: Check if string is valid GUID format
+const isValidGuid = (str) => {
+  const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return guidRegex.test(str);
+};
+
 // Retrieve Widget Script (Legacy - backwards compatibility)
 const getScript = (req, res) => {
   const jsContent = `
@@ -289,6 +295,11 @@ const getMessages = asyncHandler(async (req, res) => {
     throw new AppError('conversationId is required', 400);
   }
 
+  // Validate GUID format to prevent SQL UniqueIdentifier crash
+  if (!isValidGuid(conversationId)) {
+    throw new AppError('Invalid conversationId format', 400);
+  }
+
   const messages = await service.getMessages(conversationId, after);
 
   res.status(200).json({
@@ -308,7 +319,15 @@ const getConfig = asyncHandler(async (req, res) => {
   const { widgetId } = req.params;
   const origin = req.headers.origin || req.query.host;
 
-  const widget = await service.getWidgetConfig(widgetId);
+  let widget;
+  // Try siteKey first if not a valid GUID (prevents SQL UniqueIdentifier crash)
+  if (isValidGuid(widgetId)) {
+    widget = await service.getWidgetConfig(widgetId);
+  }
+  if (!widget) {
+    // Fallback to SiteKey lookup
+    widget = await service.getWidgetBySiteKey(widgetId);
+  }
 
   if (!widget || widget.Status !== 1) {
     throw new AppError('Widget not found or disabled', 404);
@@ -373,7 +392,15 @@ const postMessage = asyncHandler(async (req, res) => {
 
   // Basic Origin Check (Duplicate logic, ideally in middleware or service)
   const origin = req.headers.origin || (url ? new URL(url).origin : '');
-  const widget = await service.getWidgetConfig(widgetId);
+
+  // Try siteKey first if not a valid GUID (prevents SQL UniqueIdentifier crash)
+  let widget;
+  if (isValidGuid(widgetId)) {
+    widget = await service.getWidgetConfig(widgetId);
+  }
+  if (!widget) {
+    widget = await service.getWidgetBySiteKey(widgetId);
+  }
   if (!widget) throw new AppError('Widget not found', 404);
 
   const allowedDomains = JSON.parse(widget.AllowedDomains);
