@@ -1,76 +1,49 @@
 /**
  * Embed Service Layer
- * Business logic for embed chat widget
- * Uses MongoDB for messages, SQL for conversations
+ * REFACTORED: Uses Repository Pattern (SQL) + MongoDB for Content
  */
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
-const { getPool, sql } = require('../../infra/sql/pool');
 const env = require('../../config/env');
+const AppError = require('../../utils/AppError');
+
+// Repositories
+const conversationRepo = require('./conversation.repo');
+const messageRepo = require('./message.repo');
+const readRepo = require('./read.repo');
+const widgetRepo = require('./widget.repo');
+
+// Services
 const messageService = require('./message.mongo.service');
 
 /**
  * Get widget by SiteKey with validation
- * @param {string} siteKey - Public site key
- * @returns {object|null} Widget record
  */
 const getWidgetBySiteKey = async (siteKey) => {
-  const pool = getPool();
-  const result = await pool.request()
-    .input('siteKey', sql.NVarChar, siteKey)
-    .query(`
-      SELECT 
-        WidgetKey, WidgetId, WorkspaceKey, Name, Status, 
-        AllowedDomains, Theme, SiteKey
-      FROM iam.Widgets
-      WHERE SiteKey = @siteKey AND Status = 1
-    `);
-  return result.recordset[0] || null;
+  return widgetRepo.getWidgetBySiteKey(siteKey);
 };
 
 /**
  * Validate origin against widget's allowed domains
- * @param {object} widget - Widget record
- * @param {string} origin - Request origin
- * @returns {boolean} True if origin is allowed
  */
 const validateOrigin = (widget, origin) => {
   if (!origin) return false;
-
-  // Dev mode: allow all if configured
-  if (env.embed.devAllowAll && env.app.env === 'development') {
-    return true;
-  }
+  if (env.embed.devAllowAll && env.app.env === 'development') return true;
 
   try {
     const allowedDomains = JSON.parse(widget.AllowedDomains || '[]');
-
-    // Normalize origin
     const normalizedOrigin = origin.replace(/\/$/, '').toLowerCase();
 
-    // Check if any allowed domain matches
     return allowedDomains.some(domain => {
       const normalizedDomain = domain.replace(/\/$/, '').toLowerCase();
-
-      // Check exact match (e.g. https://example.com)
       if (normalizedDomain === normalizedOrigin) return true;
-
-      // Check without protocol (e.g. example.com matches http://example.com)
       const originNoProtocol = normalizedOrigin.replace(/^https?:\/\//, '');
       if (normalizedDomain === originNoProtocol) return true;
 
-      // Wildcard match (e.g., *.example.com)
       if (normalizedDomain.startsWith('*')) {
         const pattern = normalizedDomain.replace('*', '.*');
-        return new RegExp(`^${pattern}$`).test(normalizedOrigin);
+        return new RegExp(`^${pattern}$`).test(normalizedOrigin) ||
+          new RegExp(`^${pattern}$`).test(originNoProtocol);
       }
-
-      // Wildcard without protocol
-      if (normalizedDomain.startsWith('*')) {
-        const pattern = normalizedDomain.replace('*', '.*');
-        return new RegExp(`^${pattern}$`).test(originNoProtocol);
-      }
-
       return false;
     });
   } catch (err) {
@@ -81,9 +54,6 @@ const validateOrigin = (widget, origin) => {
 
 /**
  * Generate embed session token (JWT)
- * @param {object} widget - Widget record
- * @param {string} visitorId - Visitor ID
- * @returns {object} Token and expiry info
  */
 const generateSessionToken = (widget, visitorId) => {
   const payload = {
@@ -98,9 +68,7 @@ const generateSessionToken = (widget, visitorId) => {
     expiresIn: env.embed.tokenTTL
   });
 
-  // Decode to get expiry
   const decoded = jwt.decode(token);
-
   return {
     token,
     expiresAt: new Date(decoded.exp * 1000).toISOString(),
@@ -110,8 +78,6 @@ const generateSessionToken = (widget, visitorId) => {
 
 /**
  * Verify embed session token
- * @param {string} token - JWT token
- * @returns {object} Decoded payload
  */
 const verifySessionToken = (token) => {
   return jwt.verify(token, env.embed.jwtSecret);
@@ -119,370 +85,164 @@ const verifySessionToken = (token) => {
 
 /**
  * Get or create conversation for widget + visitor
- * @param {number} widgetKey - Widget key
- * @param {string} visitorId - Visitor ID
- * @param {string} visitorName - Optional visitor name
- * @returns {object} Conversation info
  */
 const getOrCreateConversation = async (widgetKey, visitorId, visitorName = null, sourceUrl = null) => {
-  const pool = getPool();
+  // Check existing active conversation
+  const existing = await conversationRepo.findActiveByVisitor(widgetKey, visitorId);
 
-  // First try to find existing open conversation
-  const existingResult = await pool.request()
-    .input('widgetKey', sql.BigInt, widgetKey)
-    .input('visitorId', sql.NVarChar, visitorId)
-    .query(`
-      SELECT ConversationKey, ConversationId, VisitorName, SourceUrl
-      FROM iam.WidgetConversations
-      WHERE WidgetKey = @widgetKey 
-        AND VisitorId = @visitorId 
-        AND Status = 1
-    `);
-
-  if (existingResult.recordset.length > 0) {
-    const conv = existingResult.recordset[0];
-    let needsUpdate = false;
-    const request = pool.request()
-      .input('conversationKey', sql.BigInt, conv.ConversationKey);
-
-    let updateSql = 'UPDATE iam.WidgetConversations SET UpdatedAt = SYSUTCDATETIME()';
-
-    // Update visitor name if provided
-    if (visitorName && visitorName !== conv.VisitorName) {
-      updateSql += ', VisitorName = @visitorName';
-      request.input('visitorName', sql.NVarChar, visitorName);
-      needsUpdate = true;
+  if (existing) {
+    // Update metadata if needed
+    if ((visitorName && visitorName !== existing.VisitorName) || (sourceUrl && sourceUrl !== existing.SourceUrl)) {
+      await conversationRepo.updateConversationMetadata(existing.ConversationKey, { visitorName, sourceUrl });
     }
-
-    // Update source URL if provided (update to latest)
-    if (sourceUrl && sourceUrl !== conv.SourceUrl) {
-      updateSql += ', SourceUrl = @sourceUrl';
-      request.input('sourceUrl', sql.NVarChar, sourceUrl);
-      needsUpdate = true;
-    }
-
-    if (needsUpdate) {
-      await request.query(`${updateSql} WHERE ConversationKey = @conversationKey`);
-    }
-
     return {
-      conversationId: conv.ConversationId,
-      conversationKey: conv.ConversationKey,
+      conversationId: existing.ConversationId,
+      conversationKey: existing.ConversationKey,
       created: false
     };
   }
 
-  // Create new conversation
-  const insertResult = await pool.request()
-    .input('widgetKey', sql.BigInt, widgetKey)
-    .input('visitorId', sql.NVarChar, visitorId)
-    .input('visitorName', sql.NVarChar, visitorName)
-    .input('sourceUrl', sql.NVarChar, sourceUrl)
-    .query(`
-      INSERT INTO iam.WidgetConversations (WidgetKey, VisitorId, VisitorName, Status, LastMessageAt, SourceUrl)
-      OUTPUT inserted.ConversationKey, inserted.ConversationId
-      VALUES (@widgetKey, @visitorId, @visitorName, 1, SYSUTCDATETIME(), @sourceUrl)
-    `);
+  // Create new
+  const newConv = await conversationRepo.createConversation({
+    widgetKey, visitorId, visitorName, sourceUrl
+  });
 
   return {
-    conversationId: insertResult.recordset[0].ConversationId,
-    conversationKey: insertResult.recordset[0].ConversationKey,
+    conversationId: newConv.ConversationId,
+    conversationKey: newConv.ConversationKey,
     created: true
   };
 };
 
 /**
- * Get conversation by visitor ID
- * @param {number} widgetKey - Widget key
- * @param {string} visitorId - Visitor ID
- * @returns {object|null} Conversation record
- */
-const getConversationByVisitor = async (widgetKey, visitorId) => {
-  const pool = getPool();
-  const result = await pool.request()
-    .input('widgetKey', sql.BigInt, widgetKey)
-    .input('visitorId', sql.NVarChar, visitorId)
-    .query(`
-      SELECT ConversationKey, ConversationId, VisitorName, Status
-      FROM iam.WidgetConversations
-      WHERE WidgetKey = @widgetKey AND VisitorId = @visitorId AND Status = 1
-    `);
-  return result.recordset[0] || null;
-};
-
-/**
- * Get conversation by visitor and siteKey
- * @param {string} siteKey - Site key
- * @param {string} visitorId - Visitor ID
- * @returns {object|null} Conversation record with widget info
- */
-const getConversationByVisitorAndSiteKey = async (siteKey, visitorId) => {
-  const pool = getPool();
-  const result = await pool.request()
-    .input('siteKey', sql.NVarChar, siteKey)
-    .input('visitorId', sql.NVarChar, visitorId)
-    .query(`
-      SELECT c.ConversationKey, c.ConversationId, c.VisitorName, c.Status,
-             w.WidgetKey, w.SiteKey
-      FROM iam.WidgetConversations c
-      INNER JOIN iam.Widgets w ON c.WidgetKey = w.WidgetKey
-      WHERE w.SiteKey = @siteKey AND c.VisitorId = @visitorId AND c.Status = 1
-    `);
-  return result.recordset[0] || null;
-};
-
-/**
- * Create message in conversation (MongoDB)
- * @param {number} conversationKey - Conversation key
- * @param {string} text - Message text
- * @param {number} senderType - 1 = visitor, 2 = agent, 3 = system
- * @param {string} senderId - Sender identifier
- * @param {string} conversationId - Conversation UUID (optional, will be fetched if not provided)
- * @param {string} clientMsgId - Client message ID for deduplication
- * @returns {object} Created message info
+ * Create message (Syncs to MongoDB and SQL)
  */
 const createMessage = async (conversationKey, text, senderType, senderId = null, conversationId = null, clientMsgId = null) => {
-  // Get conversationId if not provided
-  if (!conversationId) {
-    const pool = getPool();
-    const result = await pool.request()
-      .input('conversationKey', sql.BigInt, conversationKey)
-      .query('SELECT ConversationId FROM iam.WidgetConversations WHERE ConversationKey = @conversationKey');
-    if (result.recordset.length > 0) {
-      conversationId = result.recordset[0].ConversationId;
-    }
-  }
+  // 1. Resolve conversationId if missing
+  // If not passed, lookup not performed here. Caller should ensure logic.
 
-  // Use MongoDB for message storage
-  return messageService.createMessage(
-    conversationKey,
-    conversationId,
-    text,
-    senderType,
-    senderId,
-    clientMsgId
+  // 2. Save to MongoDB (Content Source)
+  const mongoMsg = await messageService.createMessage(
+    conversationKey, conversationId, text, senderType, senderId, clientMsgId
   );
-};
 
-/**
- * Get messages for conversation (MongoDB)
- * @param {string} conversationId - Conversation UUID
- * @param {number} limit - Max messages to return
- * @param {string} before - Get messages before this timestamp (cursor)
- * @returns {array} Messages in chronological order
- */
-const getMessages = async (conversationId, limit = 30, before = null) => {
-  return messageService.getMessages(conversationId, limit, before);
-};
+  // 3. Save to SQL (Metadata/Summary Source)
+  const sqlMsg = await messageRepo.createMessage({
+    conversationKey,
+    senderType,
+    content: text
+  });
 
-/**
- * Update conversation last activity timestamp
- * LEGACY: Use updateConversationActivityWithSeq for new code
- * @param {number} conversationKey - Conversation key
- */
-const updateConversationActivity = async (conversationKey) => {
-  const pool = getPool();
-  await pool.request()
-    .input('conversationKey', sql.BigInt, conversationKey)
-    .query(`
-      UPDATE iam.WidgetConversations 
-      SET LastMessageAt = SYSUTCDATETIME(), UpdatedAt = SYSUTCDATETIME()
-      WHERE ConversationKey = @conversationKey
-    `);
-};
+  console.log('[EmbedService] SQL Message Created:', sqlMsg);
 
-/**
- * Update conversation with latest message metadata
- * Uses safety condition to prevent LastMessageSeq from going backwards
- * This is critical for "last message correctness" under concurrent writes
- * 
- * @param {number} conversationKey - Conversation key
- * @param {number} seq - Message sequence number
- * @param {string} content - Message content (for preview)
- * @param {string} mongoId - MongoDB message ID (optional)
- */
-const updateConversationActivityWithSeq = async (conversationKey, seq, content, mongoId = null) => {
-  const pool = getPool();
-  // Note: LastMessageSeq, LastMessagePreview, LastMessageMongoId are NOT in SQL table.
-  // We only update timestamps. 'seq' check is skipped as column missing.
-
-  await pool.request()
-    .input('conversationKey', sql.BigInt, conversationKey)
-    .query(`
-      UPDATE iam.WidgetConversations 
-      SET 
-        LastMessageAt = SYSUTCDATETIME(), 
-        UpdatedAt = SYSUTCDATETIME()
-      WHERE ConversationKey = @conversationKey
-    `);
-};
-
-/**
- * Get messages with keyset cursor pagination
- * @param {number} conversationKey - SQL conversation key  
- * @param {number} limit - Max messages to return
- * @param {number|null} cursorSeq - Get messages with seq < cursorSeq
- * @returns {object} { items: Message[], nextCursor: { seq: number } | null }
- */
-const getMessagesBySeq = async (conversationKey, limit = 30, cursorSeq = null) => {
-  return messageService.getMessagesBySeq(conversationKey, limit, cursorSeq);
-};
-
-/**
- * List active conversations for a widget
- * @param {number} widgetKey - Widget key
- * @param {number} limit - Max conversations
- * @param {number} offset - Offset for pagination
- * @returns {array} Conversations with last message
- */
-const listConversations = async (widgetKey, limit = 20, offset = 0) => {
-  const pool = getPool();
-  const result = await pool.request()
-    .input('widgetKey', sql.BigInt, widgetKey)
-    .input('limit', sql.Int, limit)
-    .input('offset', sql.Int, offset)
-    .query(`
-      SELECT 
-        c.ConversationId as id,
-        c.VisitorId as visitorId,
-        c.VisitorName as visitorName,
-        c.Status as status,
-        c.CreatedAt as createdAt,
-        c.LastMessageAt as lastMessageAt,
-        (
-          SELECT TOP 1 Content 
-          FROM iam.WidgetMessages m 
-          WHERE m.ConversationKey = c.ConversationKey 
-          ORDER BY m.CreatedAt DESC
-        ) as lastMessage
-      FROM iam.WidgetConversations c
-      WHERE c.WidgetKey = @widgetKey
-      ORDER BY c.LastMessageAt DESC
-      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
-    `);
-
-  return result.recordset;
-};
-
-/**
- * List conversations by SiteKey (for agent admin)
- * Gets conversation metadata from SQL, message info from MongoDB
- * @param {string} siteKey - Site key
- * @param {number} limit - Max conversations
- * @returns {array} Conversations with message previews
- */
-const listConversationsBySiteKey = async (siteKey, limit = 50) => {
-  const pool = getPool();
-
-  // Get conversations from SQL
-  const result = await pool.request()
-    .input('siteKey', sql.NVarChar, siteKey)
-    .input('limit', sql.Int, limit)
-    .query(`
-      SELECT 
-        c.ConversationId as id,
-        c.VisitorId as visitorId,
-        c.VisitorName as visitorName,
-        c.Status as status,
-        c.CreatedAt as createdAt,
-        c.LastMessageAt as lastMessageAt,
-        w.SiteKey as siteKey
-      FROM iam.WidgetConversations c
-      INNER JOIN iam.Widgets w ON c.WidgetKey = w.WidgetKey
-      WHERE w.SiteKey = @siteKey
-      ORDER BY c.LastMessageAt DESC
-      OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY
-    `);
-
-  const conversations = result.recordset;
-
-  if (conversations.length === 0) {
-    return [];
+  if (!sqlMsg || !sqlMsg.MessageKey) {
+    console.error('[EmbedService] Failed to get MessageKey from SQL insert. Using fallback 0.');
+    // This avoids crashing but indicates DB issue.
   }
 
-  // Get message info from MongoDB in batch
-  const conversationIds = conversations.map(c => c.id);
-  const messageInfo = await messageService.getConversationMessageInfo(conversationIds);
+  // Use MessageKey (BIGINT IDENTITY) as seq, not MessageId (GUID)
+  const seqId = parseInt(sqlMsg?.MessageKey, 10) || 0;
 
-  // Merge message info into conversations
-  return conversations.map(conv => ({
-    ...conv,
-    lastMessage: messageInfo[conv.id]?.lastMessage || null,
-    messageCount: messageInfo[conv.id]?.messageCount || 0
-  }));
+  // 4. Update Conversation Summary
+  await conversationRepo.updateConversationSummary(conversationKey, {
+    seq: seqId,
+    preview: text,
+    mongoId: mongoMsg.id,
+    isVisitor: senderType === 1
+  });
+
+  // 5. Invalidate Cache (Legacy: Not needed as Redis removed)
+
+  return {
+    ...mongoMsg,
+    seq: seqId,
+    messageId: sqlMsg?.MessageId
+  };
 };
 
 /**
- * Get conversation by ID
- * @param {string} conversationId - Conversation UUID
- * @returns {object|null} Conversation with widget info
+ * Get messages by sequence (Infinite Scroll support)
+ * Uses SQL Repository
  */
-const getConversationById = async (conversationId) => {
-  const pool = getPool();
-  const result = await pool.request()
-    .input('conversationId', sql.UniqueIdentifier, conversationId)
-    .query(`
-      SELECT 
-        c.ConversationKey, c.ConversationId, c.VisitorId, c.VisitorName, c.Status,
-        w.WidgetKey, w.SiteKey, w.Name as WidgetName
-      FROM iam.WidgetConversations c
-      INNER JOIN iam.Widgets w ON c.WidgetKey = w.WidgetKey
-      WHERE c.ConversationId = @conversationId
-    `);
-  return result.recordset[0] || null;
+const getMessagesBySeq = async (conversationId, limit = 30, cursorSeq = null) => {
+  // Need Conversation Key first
+  const conv = await conversationRepo.getConversationById(conversationId);
+  if (!conv) throw new AppError('Conversation not found', 404);
+
+  const messages = await messageRepo.listMessagesBySeq(conv.ConversationKey, limit, cursorSeq);
+
+  // Return structure expected by Controller
+  const items = messages;
+  const nextCursor = items.length > 0 ? items[0].seq : null;
+
+  return {
+    items,
+    nextCursor
+  };
 };
 
 /**
- * List all conversations for a user across all workspaces
- * @param {number} userKey - User key
- * @param {number} limit - Max conversations
- * @returns {array} Conversations with message previews
+ * List conversations for User (Unified Inbox)
+ * Uses SQL Repo with Unread Counts
  */
 const listConversationsForUser = async (userKey, limit = 50) => {
-  const pool = getPool();
-
-  const result = await pool.request()
-    .input('userKey', sql.BigInt, userKey)
-    .input('limit', sql.Int, limit)
-    .query(`
-      SELECT 
-        c.ConversationId as id,
-        c.VisitorId as visitorId,
-        c.VisitorName as visitorName,
-        c.Status as status,
-        c.CreatedAt as createdAt,
-        c.LastMessageAt as lastMessageAt,
-        c.SourceUrl as domain,
-        w.SiteKey as siteKey,
-        w.Name as widgetName,
-        ws.Name as workspaceName,
-        ws.WorkspaceId as workspaceId
-      FROM iam.WidgetConversations c
-      INNER JOIN iam.Widgets w ON c.WidgetKey = w.WidgetKey
-      INNER JOIN iam.Workspaces ws ON w.WorkspaceKey = ws.WorkspaceKey
-      INNER JOIN iam.Memberships m ON m.WorkspaceKey = ws.WorkspaceKey
-      WHERE m.UserKey = @userKey AND m.Status = 1
-      ORDER BY c.LastMessageAt DESC
-      OFFSET 0 ROWS FETCH NEXT @limit ROWS ONLY
-    `);
-
-  const conversations = result.recordset;
-
-  if (conversations.length === 0) {
-    return [];
-  }
-
-  // Get message info from MongoDB
-  const conversationIds = conversations.map(c => c.id);
-  const messageInfo = await messageService.getConversationMessageInfo(conversationIds);
-
-  return conversations.map(conv => ({
-    ...conv,
-    lastMessage: messageInfo[conv.id]?.lastMessage || null,
-    messageCount: messageInfo[conv.id]?.messageCount || 0
-  }));
+  return conversationRepo.listConversationsForUser(userKey, limit);
 };
 
+/**
+ * Get messages (Legacy Support)
+ */
+const getMessages = async (conversationId, limit = 50) => {
+  const conv = await conversationRepo.getConversationById(conversationId);
+  if (!conv) throw new AppError('Conversation not found', 404);
+
+  // Use new Repo but return flat array
+  return messageRepo.listMessagesBySeq(conv.ConversationKey, limit);
+};
+
+/**
+ * Mark conversation as read
+ */
+const markConversationRead = async (conversationId, userKey) => {
+  const conv = await conversationRepo.getConversationById(conversationId);
+  if (!conv) throw new AppError('Conversation not found', 404);
+
+  // Set LastReadVisitorCount to current VisitorMessageCount
+  await readRepo.upsertReadState(conv.ConversationKey, userKey, conv.VisitorMessageCount);
+
+  return {
+    success: true
+  };
+};
+
+/**
+ * Get Conversation by ID (Direct Repo Call)
+ */
+const getConversationById = async (conversationId) => conversationRepo.getConversationById(conversationId);
+
+// Legacy Helpers (Proxy to Repo)
+const getConversationByVisitor = async (widgetKey, visitorId) => conversationRepo.findActiveByVisitor(widgetKey, visitorId);
+
+const getConversationByVisitorAndSiteKey = async (siteKey, visitorId) => conversationRepo.findActiveByVisitorAndSiteKey(siteKey, visitorId);
+
+/**
+ * Update conversation activity with seq safety (async, for socket handlers)
+ * Wrapper for updateConversationSummary that handles errors gracefully
+ */
+const updateConversationActivityWithSeq = async (conversationKey, seq, preview, messageId) => {
+  try {
+    await conversationRepo.updateConversationSummary(conversationKey, {
+      seq: parseInt(seq, 10) || 0,
+      preview: preview,
+      mongoId: messageId,
+      isVisitor: false // Called after message already created, don't increment again
+    });
+  } catch (err) {
+    console.error('[EmbedService] Failed to update conversation activity:', err);
+  }
+};
+
+// Export
 module.exports = {
   getWidgetBySiteKey,
   validateOrigin,
@@ -494,10 +254,8 @@ module.exports = {
   createMessage,
   getMessages,
   getMessagesBySeq,
-  updateConversationActivity,
-  updateConversationActivityWithSeq,
-  listConversations,
-  listConversationsBySiteKey,
+  getConversationById,
   listConversationsForUser,
-  getConversationById
+  markConversationRead,
+  updateConversationActivityWithSeq
 };

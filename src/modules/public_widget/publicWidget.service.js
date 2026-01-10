@@ -35,7 +35,7 @@ const getWidgetBySiteKey = async (siteKey) => {
  */
 const getOrCreateConversation = async (widgetKey, visitorId) => {
   const pool = getPool();
-  
+
   // First try to find existing open conversation
   const existingResult = await pool.request()
     .input('widgetKey', sql.BigInt, widgetKey)
@@ -77,7 +77,7 @@ const getOrCreateConversation = async (widgetKey, visitorId) => {
 const getMessages = async (conversationId, afterTimestamp = null) => {
   const pool = getPool();
   const request = pool.request()
-    .input('conversationId', sql.UniqueIdentifier, conversationId);
+    .input('conversationId', sql.NVarChar, conversationId);
 
   let query = `
     SELECT 
@@ -107,20 +107,20 @@ const getMessages = async (conversationId, afterTimestamp = null) => {
 const createMessage = async (widgetKey, data) => {
   const pool = getPool();
   const { visitorId, content, conversationId, senderType = 1 } = data;
-  
+
   let convKey;
   let convId;
 
   // If conversationId provided, use it directly
   if (conversationId) {
     const convResult = await pool.request()
-      .input('conversationId', sql.UniqueIdentifier, conversationId)
+      .input('conversationId', sql.NVarChar, conversationId)
       .query(`
         SELECT ConversationKey, ConversationId
         FROM iam.WidgetConversations
         WHERE ConversationId = @conversationId
       `);
-    
+
     if (convResult.recordset.length === 0) {
       throw new Error('Conversation not found');
     }
@@ -146,7 +146,7 @@ const createMessage = async (widgetKey, data) => {
           VALUES (source.WidgetKey, source.VisitorId, 1)
       OUTPUT inserted.ConversationKey, inserted.ConversationId;
     `);
-    
+
     convKey = convResult.recordset[0].ConversationKey;
     convId = convResult.recordset[0].ConversationId;
   }
@@ -161,7 +161,7 @@ const createMessage = async (widgetKey, data) => {
       OUTPUT inserted.MessageId, inserted.CreatedAt
       VALUES (@conversationKey, @senderType, @content)
     `);
-    
+
   return {
     conversationId: convId,
     messageId: msgResult.recordset[0].MessageId,
@@ -174,10 +174,10 @@ const createMessage = async (widgetKey, data) => {
  */
 const sendMessage = async (conversationId, content, senderType = 1) => {
   const pool = getPool();
-  
+
   // Get conversation key
   const convResult = await pool.request()
-    .input('conversationId', sql.UniqueIdentifier, conversationId)
+    .input('conversationId', sql.NVarChar, conversationId)
     .query(`
       SELECT ConversationKey
       FROM iam.WidgetConversations

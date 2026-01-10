@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+        }
+
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* To simulate overflowAnchor: none behavior if needed, though Virtuoso handles it via style */
+        #debug-panel {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 9999;
+            background: rgba(0, 0, 0, 0.8);
+            color: lime;
+            font-family: monospace;
+            font-size: 10px;
+            padding: 4px;
+            pointer-events: none;
+            display: none;
+        }
+    </style>
+    <!-- 
+      IMPORT MAP CONFIGURATION
+      - React & DOM: pinned versions
+      - Virtuoso: declared external react dep to use OUR react instance (prevents hooks errors)
+      - Socket.io: explicit esm import
+    -->
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "react-virtuoso": "https://esm.sh/react-virtuoso@4.6.2?external=react,react-dom",
+            "socket.io-client": "https://esm.sh/socket.io-client@4.7.4"
+        }
+    }
+    </script>
+    <script>
+        // Global Error Handler
+        window.onerror = function (msg, url, line, col, error) {
+            const el = document.getElementById('debug-panel');
+            if (el) {
+                el.style.display = 'block';
+                el.innerHTML += `<div>ERR: ${msg} (${line}:${col})</div>`;
+            }
+            return false;
+        };
+        // Global Logger
+        window.logDebug = function (msg) {
+            const el = document.getElementById('debug-panel');
+            if (el) {
+                // el.style.display = 'block'; // Uncomment to see logs always
+                el.innerHTML += `<div>LOG: ${msg}</div>`;
+            }
+            console.log('[Widget]', msg);
+        }
+    </script>
+</head>
+
+<body class="bg-gray-50 h-screen flex flex-col">
+    <div id="debug-panel"></div>
+    <div id="root" class="h-full flex flex-col"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { Virtuoso } from 'react-virtuoso';
+        import { io } from 'socket.io-client';
+
+        window.logDebug('Imports loaded');
+
+        // --- Helpers ---
+        const formatTime = (dateStr) => {
+            try {
+                return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } catch (e) { return ''; }
+        };
+
+        const formatDateSeparator = (dateStr) => {
+            try {
+                const date = new Date(dateStr);
+                const today = new Date();
+                if (date.toDateString() === today.toDateString()) return 'Today';
+                return date.toLocaleDateString();
+            } catch (e) { return ''; }
+        };
+
+        const LoadingSpinner = () => (
+            <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+        );
+
+        const App = () => {
+            const [config, setConfig] = useState(null);
+            const [socket, setSocket] = useState(null);
+            const [isConnected, setIsConnected] = useState(false);
+            const [isConnecting, setIsConnecting] = useState(true);
+            const [messages, setMessages] = useState([]);
+            const [inputValue, setInputValue] = useState('');
+            const [conversationId, setConversationId] = useState(null);
+            const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+            const [hasMore, setHasMore] = useState(true);
+            const [isTyping, setIsTyping] = useState(false);
+
+            const virtuosoRef = useRef(null);
+
+            // 1. Load Config
+            useEffect(() => {
+                try {
+                    const params = new URLSearchParams(window.location.search);
+                    const cfg = {
+                        siteKey: params.get('siteKey'),
+                        visitorId: params.get('visitorId'),
+                        sourceUrl: params.get('sourceUrl') || '',
+                        title: params.get('title') || 'Support',
+                        apiBase: window.location.origin
+                    };
+                    setConfig(cfg);
+                    window.logDebug(`Config loaded: ${cfg.siteKey}`);
+                } catch (e) {
+                    window.logDebug(`Config Error: ${e.message}`);
+                }
+            }, []);
+
+            // 2. Connect
+            useEffect(() => {
+                if (!config) return;
+
+                const connect = async () => {
+                    try {
+                        window.logDebug('Fetching session...');
+                        const res = await fetch(`${config.apiBase}/api/embed/session`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ siteKey: config.siteKey, visitorId: config.visitorId })
+                        });
+                        const data = await res.json();
+                        if (!data.success) throw new Error(data.message || 'Failed to get session');
+
+                        const token = data.data.token;
+                        window.logDebug('Token received, connecting socket...');
+
+                        const newSocket = io(`${config.apiBase}/embed`, {
+                            auth: { token },
+                            transports: ['websocket']
+                        });
+
+                        newSocket.on('connect', () => {
+                            window.logDebug('Socket Connected!');
+                            setIsConnected(true);
+                            setIsConnecting(false);
+
+                            newSocket.emit('embed:join', { sourceUrl: config.sourceUrl }, (response) => {
+                                if (response.success) {
+                                    setConversationId(response.data.conversationId);
+                                    window.logDebug(`Joined: ${response.data.conversationId}`);
+
+                                    // Load History
+                                    // Important: pass cursorSeq as null/undefined for latest
+                                    newSocket.emit('embed:history', { limit: 30 }, (histRes) => {
+                                        if (histRes.success && histRes.data?.messages) {
+                                            setMessages(histRes.data.messages.reverse());
+                                            window.logDebug(`History loaded: ${histRes.data.messages.length} msgs`);
+                                        }
+                                    });
+                                }
+                            });
+                            window.parent.postMessage({ type: 'EMBED_READY' }, '*');
+                        });
+
+                        newSocket.on('disconnect', () => {
+                            window.logDebug('Socket Disconnected');
+                            setIsConnected(false);
+                            // setIsConnecting(true); // Maybe re-connecting?
+                        });
+
+                        newSocket.on('connect_error', (err) => {
+                            window.logDebug(`Connect Error: ${err.message}`);
+                        });
+
+                        newSocket.on('embed:message', (msg) => {
+                            // Deduplication logic
+                            if (msg.clientMsgId) {
+                                setMessages(prev => {
+                                    const exists = prev.some(m => m.clientMsgId === msg.clientMsgId);
+                                    if (exists) return prev.map(m => m.clientMsgId === msg.clientMsgId ? msg : m);
+                                    return [...prev, msg];
+                                });
+                            } else {
+                                setMessages(prev => {
+                                    if (prev.some(m => m.id === msg.id)) return prev;
+                                    return [...prev, msg];
+                                });
+                            }
+
+                            if (document.hidden && msg.sender === 'agent') {
+                                window.parent.postMessage({ type: 'EMBED_UNREAD' }, '*');
+                            }
+                        });
+
+                        newSocket.on('embed:typing', (data) => {
+                            if (data.sender === 'agent') setIsTyping(data.isTyping);
+                        });
+
+                        setSocket(newSocket);
+
+                        return () => newSocket.disconnect();
+                    } catch (err) {
+                        window.logDebug(`Init Error: ${err.message}`);
+                        console.error('Connection failed:', err);
+                        setIsConnecting(false);
+                    }
+                };
+
+                connect();
+            }, [config]);
+
+            const handleSend = () => {
+                if (!inputValue.trim() || !socket) return;
+
+                const text = inputValue.trim();
+                const tempId = 'temp_' + Date.now();
+
+                const optMsg = {
+                    id: tempId,
+                    clientMsgId: tempId,
+                    text,
+                    sender: 'visitor',
+                    createdAt: new Date().toISOString()
+                };
+
+                setMessages(prev => [...prev, optMsg]);
+                setInputValue('');
+
+                socket.emit('embed:message', {
+                    conversationId,
+                    content: text,
+                    clientMsgId: tempId
+                });
+
+                // Scroll to bottom handled by followOutput="smooth" generally,
+                // but sometimes explicit scroll is nice for UX
+                // formatted timeout to wait for React render
+                // setTimeout(() => {
+                //      virtuosoRef.current?.scrollToIndex({ index: chatItems.length - 1, align: 'end', behavior: 'smooth' });
+                // }, 50);
+            };
+
+            const handleLoadMore = useCallback(() => {
+                if (isLoadingOlder || !hasMore || !messages.length || !socket) return;
+
+                const oldestMsg = messages[0];
+                const beforeSeq = oldestMsg.seq;
+
+                if (beforeSeq === undefined || beforeSeq === null) return;
+
+                setIsLoadingOlder(true);
+
+                socket.emit('embed:history', { limit: 30, cursorSeq: beforeSeq }, (res) => {
+                    setIsLoadingOlder(false);
+                    if (res.success && res.data?.messages && res.data.messages.length > 0) {
+                        const newMsgs = res.data.messages.reverse();
+                        setMessages(prev => {
+                            const existingIds = new Set(prev.map(m => m.id));
+                            const unique = newMsgs.filter(m => !existingIds.has(m.id));
+                            if (unique.length === 0) {
+                                setHasMore(false);
+                                return prev;
+                            }
+                            // Prepend and maintain scroll
+                            return [...unique, ...prev];
+                        });
+                    } else {
+                        setHasMore(false);
+                    }
+                });
+
+            }, [isLoadingOlder, hasMore, messages, socket]);
+
+            const chatItems = useMemo(() => {
+                const items = [];
+                if (!messages.length) return items;
+
+                let currentDate = '';
+                messages.forEach(msg => {
+                    const d = new Date(msg.createdAt).toDateString();
+                    if (d !== currentDate) {
+                        currentDate = d;
+                        items.push({ type: 'date', date: msg.createdAt });
+                    }
+                    items.push({ type: 'message', data: msg });
+                });
+
+                if (isTyping) items.push({ type: 'typing' });
+                return items;
+            }, [messages, isTyping]);
+
+            // Copied from ChatArea.tsx
+            const START_INDEX = 10000;
+            const firstItemIndex = Math.max(0, START_INDEX - chatItems.length);
+
+            const itemContent = (index, item) => {
+                if (item.type === 'date') {
+                    return (
+                        <div className="flex justify-center py-4">
+                            <span className="text-xs text-gray-400 bg-gray-100 px-3 py-1 rounded-full">{formatDateSeparator(item.date)}</span>
+                        </div>
+                    );
+                }
+                if (item.type === 'typing') {
+                    return (
+                        <div className="flex gap-2 max-w-[85%] mb-4">
+                            <div className="bg-gray-100 text-gray-800 p-3 rounded-2xl rounded-tl-none">
+                                <span className="text-xs">Typing...</span>
+                            </div>
+                        </div>
+                    );
+                }
+
+                const msg = item.data;
+                const isAgent = msg.sender === 'agent' || msg.senderType === 2;
+
+                return (
+                    <div className={`flex flex-col mb-4 ${isAgent ? 'items-start' : 'items-end'}`}>
+                        <div className={`max-w-[85%] p-3 rounded-2xl text-[14px] leading-relaxed break-words ${isAgent
+                            ? 'bg-white text-gray-800 border border-gray-200 rounded-tl-none'
+                            : 'bg-blue-600 text-white rounded-tr-none'
+                            }`}>
+                            {msg.text}
+                        </div>
+                        <span className="text-[10px] text-gray-400 mt-1 px-1">
+                            {formatTime(msg.createdAt)}
+                        </span>
+                    </div>
+                );
+            };
+
+            const Header = () => (
+                <div style={{ height: 20 }}>
+                    {isLoadingOlder && <div className="flex justify-center p-2"><LoadingSpinner /></div>}
+                </div>
+            );
+
+            if (!config) return null;
+
+            return (
+                <>
+                    <div className="h-[60px] bg-gradient-to-r from-blue-600 to-blue-700 text-white flex items-center px-4 shadow-md shrink-0">
+                        <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center font-bold text-sm mr-3">
+                            {config.title.charAt(0)}
+                        </div>
+                        <div className="flex-1">
+                            <div className="font-semibold text-[15px]">{config.title}</div>
+                            <div className="text-[11px] opacity-90">We reply fast</div>
+                        </div>
+                        <button onClick={() => window.parent.postMessage({ type: 'EMBED_CLOSE' }, '*')} className="w-8 h-8 flex items-center justify-center hover:bg-white/10 rounded-lg">
+                            ✕
+                        </button>
+                    </div>
+
+                    <div className="flex-1 bg-gray-50 relative">
+                        {isConnecting ? (
+                            <div className="absolute inset-0 flex items-center justify-center flex-col gap-3 text-gray-500 text-sm">
+                                <LoadingSpinner />
+                                <span className="mt-2">Connecting...</span>
+                            </div>
+                        ) : chatItems.length === 0 ? (
+                            <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+                                Start a conversation...
+                            </div>
+                        ) : (
+                            <Virtuoso
+                                ref={virtuosoRef}
+                                style={{ height: '100%' }}
+                                data={chatItems}
+                                firstItemIndex={firstItemIndex}
+                                initialTopMostItemIndex={chatItems.length - 1} // Start at bottom
+                                startReached={handleLoadMore} // Trigger when scrolling up
+                                itemContent={itemContent}
+                                followOutput="smooth" // Auto-scroll on new messages
+                                components={{ Header }}
+                                atBottomThreshold={50} // 50px offset stickiness
+                            />
+                        )}
+                    </div>
+
+                    <div className="p-3 bg-white border-t border-gray-200 shrink-0">
+                        <div className="flex items-end gap-2 bg-gray-100 rounded-[20px] p-2 pr-2 border-2 border-transparent focus-within:border-blue-500 focus-within:bg-white transition-all">
+                            <textarea
+                                value={inputValue}
+                                onChange={e => setInputValue(e.target.value)}
+                                onKeyDown={e => {
+                                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+                                }}
+                                placeholder="Type a message..."
+                                className="flex-1 bg-transparent border-none text-[14px] resize-none outline-none max-h-[100px] min-h-[24px] py-1 px-2"
+                                rows={1}
+                            />
+                            <button
+                                onClick={handleSend}
+                                disabled={!inputValue.trim() || !isConnected}
+                                className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-colors ${!inputValue.trim()
+                                    ? 'bg-gray-300 text-white cursor-not-allowed'
+                                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                                    }`}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 ml-0.5">
+                                    <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div className="text-center mt-2">
+                            <a href="#" className="text-[10px] text-gray-400 hover:text-gray-600 no-underline">Powered by Nemark</a>
+                        </div>
+                    </div>
+                </>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>

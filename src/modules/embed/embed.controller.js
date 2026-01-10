@@ -467,7 +467,12 @@ const getMessages = asyncHandler(async (req, res) => {
     throw new AppError('conversationId is required', 400);
   }
 
-  const messages = await embedService.getMessages(conversationId, parseInt(limit, 10));
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(conversationId)) {
+    throw new AppError('Invalid conversationId format', 400);
+  }
+
+  const messages = await embedService.getMessages(conversationId.toLowerCase(), parseInt(limit, 10));
 
   res.status(200).json({
     status: 'success',
@@ -494,17 +499,22 @@ const getMessagesBySeq = asyncHandler(async (req, res) => {
     throw new AppError('conversationId is required', 400);
   }
 
-  // Lookup conversation to get conversationKey
-  const conv = await embedService.getConversationById(conversationId);
-  if (!conv) {
-    throw new AppError('Conversation not found', 404);
+  // Validate GUID format to prevent SQL driver crash
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(conversationId)) {
+    console.warn(`[Embed] Invalid conversationId format: ${conversationId}`);
+    throw new AppError(`Invalid conversationId format`, 400);
   }
+
+  // Ensure lowercase for tedious driver compatibility
+  // Ensure lowercase for tedious driver compatibility
+  const safeId = conversationId.toLowerCase();
 
   const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 100);
   const parsedCursorSeq = cursorSeq ? parseInt(cursorSeq, 10) : null;
 
   const result = await embedService.getMessagesBySeq(
-    conv.ConversationKey,
+    safeId,
     parsedLimit,
     parsedCursorSeq
   );
@@ -562,7 +572,11 @@ const sendAgentMessage = asyncHandler(async (req, res) => {
   // Get conversation
   let conv;
   if (conversationId) {
-    conv = await embedService.getConversationById(conversationId);
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(conversationId)) {
+      throw new AppError('Invalid conversationId format', 400);
+    }
+    conv = await embedService.getConversationById(conversationId.toLowerCase());
   } else {
     conv = await embedService.getConversationByVisitorAndSiteKey(siteKey, visitorId);
   }
@@ -585,13 +599,7 @@ const sendAgentMessage = asyncHandler(async (req, res) => {
     finalClientMsgId
   );
 
-  // Update activity with seq safety (async, don't block)
-  embedService.updateConversationActivityWithSeq(
-    conv.ConversationKey,
-    message.seq,
-    message.content,
-    message.messageId
-  ).catch(err => console.error('Failed to update conversation activity:', err));
+
 
   // CRITICAL: Build response from DB record
   const messageData = {
@@ -626,6 +634,31 @@ const sendAgentMessage = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+   * POST /conversations/:conversationId/read
+   * Mark conversation as read for the agent
+   */
+const markRead = asyncHandler(async (req, res) => {
+  const { conversationId } = req.params;
+  const user = req.user;
+
+  if (!user) {
+    throw new AppError('Authentication required', 401);
+  }
+
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!conversationId || !uuidRegex.test(conversationId)) {
+    throw new AppError('Invalid conversationId format', 400);
+  }
+
+  const result = await embedService.markConversationRead(conversationId.toLowerCase(), user.UserKey);
+
+  res.status(200).json({
+    status: 'success',
+    data: result
+  });
+});
+
 module.exports = {
   getWidgetScript,
   getWidgetScriptMinified,
@@ -639,6 +672,7 @@ module.exports = {
   getMessages,
   getMessagesBySeq,
   createAgentSession,
-  sendAgentMessage
+  sendAgentMessage,
+  markRead
 };
 
